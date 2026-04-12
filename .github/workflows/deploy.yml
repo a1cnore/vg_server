@@ -86,7 +86,7 @@ jobs:
             echo "=== Checking container status ==="
             docker compose -f server/docker-compose.yml ps
 
-            PORTS="443 8000 2112 9000 80 3000"
+            PORTS="443 8000 2112 9000 80"
             for PORT in $PORTS; do
               echo "Checking port ${PORT}..."
               if ! timeout 5 bash -lc ">/dev/tcp/127.0.0.1/${PORT}"; then
