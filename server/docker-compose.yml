@@ -9,7 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ../dashboard/drizzle/0000_sweet_dracula.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./init.sql:/docker-entrypoint-initdb.d/01-schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vg"]
       interval: 2s
