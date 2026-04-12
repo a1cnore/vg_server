@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vg
+      POSTGRES_PASSWORD: vg
+      POSTGRES_DB: vg
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../dashboard/drizzle/0000_sweet_dracula.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vg"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
   vg-server:
     build: .
     ports:
@@ -9,6 +26,38 @@ services:
     environment:
       - VG_HOST_IP=${VG_HOST_IP:-192.168.64.1}
       - VG_GAME_PROXY_PORT=9000
+      - DATABASE_URL=postgres://vg:vg@postgres:5432/vg
     volumes:
       - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+  dashboard:
+    build: ../dashboard
+    expose:
+      - "3000"
+    environment:
+      - DATABASE_URL=postgres://vg:vg@postgres:5432/vg
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - dashboard
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

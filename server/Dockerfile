@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-RUN pip install --no-cache-dir mitmproxy==10.0.0
+RUN pip install --no-cache-dir mitmproxy==10.0.0 psycopg2-binary requests
 
 COPY *.py /app/
 COPY entrypoint.sh /app/

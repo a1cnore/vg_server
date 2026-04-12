@@ -43,6 +43,11 @@ import time
 import uuid as _uuid
 from pathlib import Path
 
+try:
+    import vg_db
+except ImportError:
+    vg_db = None
+
 HOST = "0.0.0.0"
 PORT = 2112
 
@@ -588,6 +593,29 @@ async def push_to_all(data: dict):
             _clients.pop(uid, None)
 
 
+async def push_to_user(player_uuid: str, data: dict):
+    """Send a push message to a specific user by playerUUID."""
+    global _last_push_time
+    client = _clients.get(player_uuid)
+    if client is None:
+        # Try matching by handle (check all clients)
+        for uid, c in _clients.items():
+            if uid.lower() == player_uuid.lower():
+                client = c
+                break
+    if client is None:
+        print(f"[WS] User {player_uuid} not connected", file=sys.stderr)
+        return
+    _last_push_time = time.time()
+    msg = json.dumps(data)
+    try:
+        await client.send_text(msg)
+        print(f"\033[36m[WS PUSH]\033[0m → {client.uuid}: {msg[:200]}", file=sys.stderr)
+    except Exception as e:
+        print(f"\033[31m[WS ERR]\033[0m  {client.uuid}: {e}", file=sys.stderr)
+        _clients.pop(client.uuid, None)
+
+
 # ════════════════════════════════════════════════════════════════
 # Connection handler
 # ════════════════════════════════════════════════════════════════
@@ -678,6 +706,13 @@ async def handle_connection(reader: asyncio.StreamReader, writer: asyncio.Stream
     _clients[player_uuid] = client
     print(f"\033[32m[WS CONN]\033[0m {player_uuid} from {addr_str} (total: {len(_clients)})", file=sys.stderr)
 
+    # Mark user online in DB
+    if vg_db is not None:
+        try:
+            vg_db.set_user_online(player_uuid, True)
+        except Exception as e:
+            print(f"[WS] DB set_user_online error: {e}", file=sys.stderr)
+
     # WebSocket read loop — log everything the client sends
     buf = b""
     try:
@@ -723,6 +758,13 @@ async def handle_connection(reader: asyncio.StreamReader, writer: asyncio.Stream
         _clients.pop(player_uuid, None)
         client.close()
         print(f"\033[31m[WS DISC]\033[0m {player_uuid} ({len(_clients)} remaining)", file=sys.stderr)
+
+        # Mark user offline in DB
+        if vg_db is not None:
+            try:
+                vg_db.set_user_online(player_uuid, False)
+            except Exception as e:
+                print(f"[WS] DB set_user_online error: {e}", file=sys.stderr)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -794,6 +836,10 @@ def _print_help():
   {C}log filter [SUBSTR]{R}          filter to methods containing SUBSTR (empty = clear)
   {C}log last [N]{R}                 show last N log entries {D}(default: 10){R}
 
+  {M}── Targeting ──{R}
+  {C}@USER cmd ...{R}                send push only to USER's WebSocket (by UUID or handle)
+                                   {D}e.g. @TakaJungle party-invite{R}
+
   {M}── Server ──{R}
   {C}clients{R}                      list connected clients
   {C}ping{R}                         send WebSocket ping frame
@@ -817,6 +863,24 @@ async def stdin_loop():
         line = line.strip()
         if not line:
             continue
+
+        # @user prefix: route push to a specific user instead of broadcast
+        # e.g. "@TakaJungle party-invite" sends only to that user's WebSocket
+        _target_user = None
+        if line.startswith("@"):
+            first_space = line.find(" ")
+            if first_space > 0:
+                _target_user = line[1:first_space]
+                line = line[first_space + 1:].strip()
+                if not line:
+                    continue
+
+        # When _target_user is set, replace push_to_all calls with push_to_user
+        async def _push(data):
+            if _target_user:
+                await push_to_user(_target_user, data)
+            else:
+                await push_to_all(data)
 
         parts = line.split()
         cmd = parts[0].lower() if parts else ""
@@ -853,7 +917,7 @@ async def stdin_loop():
             name = parts[1] if len(parts) > 1 else "TakaJungle"
             mode = _resolve_mode(parts[2]) if len(parts) > 2 else "casual_5v5"
             puuid = str(_uuid.uuid4())
-            await push_to_all(msg_party_join_request(
+            await _push(msg_party_join_request(
                 name, _friend_uuid(name), puuid, queue_mode=mode))
             print(f"  → party invite from {name} ({mode})", file=sys.stderr)
 
@@ -862,7 +926,7 @@ async def stdin_loop():
             _party_uuid = str(_uuid.uuid4())
             _party_mode = mode
             _party_members = [_make_member("vphone", "self-uuid", is_captain=True, slot=0)]
-            await push_to_all(msg_party_state_update(
+            await _push(msg_party_state_update(
                 _party_uuid, _party_mode, _party_members))
             print(f"  → party created: {_party_uuid[:8]} ({_party_mode})", file=sys.stderr)
 
@@ -876,7 +940,7 @@ async def stdin_loop():
                     _party_mode = "casual_5v5"
                     _party_members = [_make_member("vphone", "self-uuid", is_captain=True, slot=0)]
                 member = _party_add_member(name)
-                await push_to_all(msg_party_state_update(
+                await _push(msg_party_state_update(
                     _party_uuid, _party_mode, _party_members))
                 print(f"  → added {name} (slot {member['slot']}), {len(_party_members)} members", file=sys.stderr)
 
@@ -888,7 +952,7 @@ async def stdin_loop():
                 removed = _party_remove_member(name)
                 if removed:
                     if _party_uuid:
-                        await push_to_all(msg_party_state_update(
+                        await _push(msg_party_state_update(
                             _party_uuid, _party_mode, _party_members))
                     print(f"  → removed {name}, {len(_party_members)} remaining", file=sys.stderr)
                 else:
@@ -898,7 +962,7 @@ async def stdin_loop():
             name = parts[1] if len(parts) > 1 else "TakaJungle"
             fuuid = _friend_uuid(name)
             removed = _party_remove_member(name)
-            await push_to_all(msg_party_player_left(
+            await _push(msg_party_player_left(
                 fuuid, name, _party_uuid or str(_uuid.uuid4()),
                 list(_party_members), _party_mode))
             print(f"  → {name} left party", file=sys.stderr)
@@ -907,7 +971,7 @@ async def stdin_loop():
             name = parts[1] if len(parts) > 1 else "TakaJungle"
             fuuid = _friend_uuid(name)
             removed = _party_remove_member(name)
-            await push_to_all(msg_party_member_kick(
+            await _push(msg_party_member_kick(
                 fuuid, name, _party_uuid or str(_uuid.uuid4()),
                 list(_party_members), _party_mode))
             print(f"  → {name} kicked from party", file=sys.stderr)
@@ -919,7 +983,7 @@ async def stdin_loop():
             else:
                 _party_mode = _resolve_mode(parts[1])
                 if _party_uuid and _party_members:
-                    await push_to_all(msg_party_state_update(
+                    await _push(msg_party_state_update(
                         _party_uuid, _party_mode, _party_members))
                 print(f"  → mode changed to {_party_mode}", file=sys.stderr)
 
@@ -938,19 +1002,19 @@ async def stdin_loop():
             _party_members = []
             _party_mode = "casual_5v5"
             if old_uuid:
-                await push_to_all(msg_party_state_update(old_uuid, _party_mode, []))
+                await _push(msg_party_state_update(old_uuid, _party_mode, []))
             print("  → party dissolved", file=sys.stderr)
 
         # ────────────────────────────────────────
         # Friends / Social
         # ────────────────────────────────────────
         elif cmd == "friend-refresh":
-            await push_to_all(msg_friends_list_update())
+            await _push(msg_friends_list_update())
             print("  → friendsListUpdate pushed", file=sys.stderr)
 
         elif cmd == "friend-req":
             name = parts[1] if len(parts) > 1 else "TakaJungle"
-            await push_to_all(msg_friend_request(name, _friend_uuid(name)))
+            await _push(msg_friend_request(name, _friend_uuid(name)))
             print(f"  → friend request from {name}", file=sys.stderr)
 
         elif cmd == "friend-online":
@@ -961,7 +1025,7 @@ async def stdin_loop():
                 fuuid = _friend_uuid(name)
                 if name in KNOWN_FRIENDS:
                     KNOWN_FRIENDS[name]["availability"] = "online"
-                await push_to_all(msg_presence_update(fuuid, "online"))
+                await _push(msg_presence_update(fuuid, "online"))
                 print(f"  → {name} is now online", file=sys.stderr)
 
         elif cmd == "friend-offline":
@@ -972,7 +1036,7 @@ async def stdin_loop():
                 fuuid = _friend_uuid(name)
                 if name in KNOWN_FRIENDS:
                     KNOWN_FRIENDS[name]["availability"] = "offline"
-                await push_to_all(msg_presence_update(fuuid, "offline"))
+                await _push(msg_presence_update(fuuid, "offline"))
                 print(f"  → {name} is now offline", file=sys.stderr)
 
         elif cmd == "friend-ingame":
@@ -983,7 +1047,7 @@ async def stdin_loop():
                 fuuid = _friend_uuid(name)
                 if name in KNOWN_FRIENDS:
                     KNOWN_FRIENDS[name]["availability"] = "in_match"
-                await push_to_all(msg_presence_update(fuuid, "in_match"))
+                await _push(msg_presence_update(fuuid, "in_match"))
                 print(f"  → {name} is now in-game", file=sys.stderr)
 
         elif cmd == "friend-list":
@@ -1003,19 +1067,19 @@ async def stdin_loop():
             name = parts[1] if len(parts) > 1 else "TakaJungle"
             guild = parts[2] if len(parts) > 2 else "Stormguard"
             tag = parts[3] if len(parts) > 3 else "SG"
-            await push_to_all(msg_guild_invite(name, _friend_uuid(name), guild, tag))
+            await _push(msg_guild_invite(name, _friend_uuid(name), guild, tag))
             print(f"  → guild invite from {name} ({guild} [{tag}])", file=sys.stderr)
 
         elif cmd == "team-invite":
             name = parts[1] if len(parts) > 1 else "TakaJungle"
             team = parts[2] if len(parts) > 2 else "Nova"
             tag = parts[3] if len(parts) > 3 else "NV"
-            await push_to_all(msg_team_invite(name, _friend_uuid(name), team, tag))
+            await _push(msg_team_invite(name, _friend_uuid(name), team, tag))
             print(f"  → team invite from {name} ({team} [{tag}])", file=sys.stderr)
 
         elif cmd == "invite":
             if len(parts) >= 3:
-                await push_to_all(msg_pending_invite(parts[1], parts[2], _friend_uuid(parts[2])))
+                await _push(msg_pending_invite(parts[1], parts[2], _friend_uuid(parts[2])))
             else:
                 print("  Usage: invite partyInvite|teamInvite|guildInvite NAME", file=sys.stderr)
 
@@ -1024,12 +1088,12 @@ async def stdin_loop():
         # ────────────────────────────────────────
         elif cmd == "match-found":
             n = int(parts[1]) if len(parts) > 1 else 6
-            await push_to_all(msg_match_found(n))
+            await _push(msg_match_found(n))
             print(f"  → match found ({n} players)", file=sys.stderr)
 
         elif cmd == "queue":
             n = int(parts[1]) if len(parts) > 1 else 1
-            await push_to_all(msg_queue_update("pending_auto", n))
+            await _push(msg_queue_update("pending_auto", n))
             print(f"  → queue: pending_auto ({n} players)", file=sys.stderr)
 
         elif cmd == "queue-state":
@@ -1039,7 +1103,7 @@ async def stdin_loop():
             else:
                 state = parts[1]
                 n = int(parts[2]) if len(parts) > 2 else 1
-                await push_to_all(msg_queue_update(state, n))
+                await _push(msg_queue_update(state, n))
                 print(f"  → queue state: {state} ({n} players)", file=sys.stderr)
 
         # ────────────────────────────────────────
@@ -1058,7 +1122,7 @@ async def stdin_loop():
 
                     # Step 1: send invite
                     puuid = str(_uuid.uuid4())
-                    await push_to_all(msg_party_join_request(
+                    await _push(msg_party_join_request(
                         name, _friend_uuid(name), puuid, queue_mode=mode))
                     print(f"    [1/3] invite sent", file=sys.stderr)
 
@@ -1071,14 +1135,14 @@ async def stdin_loop():
                         _make_member("vphone", "self-uuid", is_captain=True, slot=0),
                         _make_member(name, _friend_uuid(name), is_captain=False, slot=1),
                     ]
-                    await push_to_all(msg_party_state_update(
+                    await _push(msg_party_state_update(
                         _party_uuid, _party_mode, _party_members))
                     print(f"    [2/3] party state pushed (2 members)", file=sys.stderr)
 
                     await asyncio.sleep(1)
 
                     # Step 3: send another state update to confirm
-                    await push_to_all(msg_party_state_update(
+                    await _push(msg_party_state_update(
                         _party_uuid, _party_mode, _party_members))
                     print(f"    [3/3] state confirmed", file=sys.stderr)
 
@@ -1087,25 +1151,25 @@ async def stdin_loop():
                     print(f"  → seq matchmaking: target {target} players", file=sys.stderr)
 
                     for i in range(1, target + 1):
-                        await push_to_all(msg_queue_update("pending_auto", i))
+                        await _push(msg_queue_update("pending_auto", i))
                         print(f"    [{i}/{target}] pending_auto ({i} players)", file=sys.stderr)
                         if i < target:
                             await asyncio.sleep(2)
 
                     await asyncio.sleep(1)
-                    await push_to_all(msg_match_found(target))
+                    await _push(msg_match_found(target))
                     print(f"    → match found!", file=sys.stderr)
 
                 elif seq_name == "friend-wave":
                     print(f"  → seq friend-wave: all friends coming online", file=sys.stderr)
                     for i, (name, info) in enumerate(KNOWN_FRIENDS.items()):
                         info["availability"] = "online"
-                        await push_to_all(msg_presence_update(info["uuid"], "online"))
+                        await _push(msg_presence_update(info["uuid"], "online"))
                         print(f"    [{i+1}/{len(KNOWN_FRIENDS)}] {name} → online", file=sys.stderr)
                         if i < len(KNOWN_FRIENDS) - 1:
                             await asyncio.sleep(1)
                     # Trigger re-fetch so client sees updated statuses
-                    await push_to_all(msg_friends_list_update())
+                    await _push(msg_friends_list_update())
                     print(f"    → friendsListUpdate sent", file=sys.stderr)
 
                 elif seq_name == "spam":
@@ -1114,7 +1178,7 @@ async def stdin_loop():
                     names = list(KNOWN_FRIENDS.keys())
                     for i in range(count):
                         name = names[i % len(names)]
-                        await push_to_all(msg_party_join_request(
+                        await _push(msg_party_join_request(
                             name, _friend_uuid(name), str(_uuid.uuid4())))
                         print(f"    [{i+1}/{count}] invite from {name}", file=sys.stderr)
                         await asyncio.sleep(0.3)
@@ -1129,7 +1193,7 @@ async def stdin_loop():
                     print(f"  → seq party-fill: adding {len(online)} online friends ({mode})", file=sys.stderr)
                     for i, (name, info) in enumerate(online):
                         _party_add_member(name, info["uuid"])
-                        await push_to_all(msg_party_state_update(
+                        await _push(msg_party_state_update(
                             _party_uuid, _party_mode, _party_members))
                         print(f"    [{i+1}/{len(online)}] added {name}", file=sys.stderr)
                         if i < len(online) - 1:
@@ -1144,16 +1208,16 @@ async def stdin_loop():
                     # Friends come online
                     for h, info in list(KNOWN_FRIENDS.items())[:3]:
                         info["availability"] = "online"
-                        await push_to_all(msg_presence_update(info["uuid"], "online"))
+                        await _push(msg_presence_update(info["uuid"], "online"))
                         print(f"    {h} → online", file=sys.stderr)
                         await asyncio.sleep(0.8)
 
-                    await push_to_all(msg_friends_list_update())
+                    await _push(msg_friends_list_update())
                     await asyncio.sleep(1)
 
                     # Party invite
                     puuid = str(_uuid.uuid4())
-                    await push_to_all(msg_party_join_request(
+                    await _push(msg_party_join_request(
                         name, _friend_uuid(name), puuid, queue_mode=mode))
                     print(f"    invite from {name}", file=sys.stderr)
                     await asyncio.sleep(3)
@@ -1165,19 +1229,19 @@ async def stdin_loop():
                         _make_member("vphone", "self-uuid", is_captain=False, slot=0),
                         _make_member(name, _friend_uuid(name), is_captain=True, slot=1),
                     ]
-                    await push_to_all(msg_party_state_update(
+                    await _push(msg_party_state_update(
                         _party_uuid, _party_mode, _party_members))
                     print(f"    party formed ({len(_party_members)} members)", file=sys.stderr)
                     await asyncio.sleep(2)
 
                     # Queue
                     for i in range(1, 7):
-                        await push_to_all(msg_queue_update("pending_auto", i))
+                        await _push(msg_queue_update("pending_auto", i))
                         print(f"    queue: {i}/6", file=sys.stderr)
                         await asyncio.sleep(1.5)
 
                     # Match found
-                    await push_to_all(msg_match_found(6))
+                    await _push(msg_match_found(6))
                     print(f"    match found!", file=sys.stderr)
 
                 else:
@@ -1189,13 +1253,13 @@ async def stdin_loop():
         # ────────────────────────────────────────
         elif cmd == "state":
             if len(parts) >= 3:
-                await push_to_all(msg_state_update({parts[1]: parts[2]}))
+                await _push(msg_state_update({parts[1]: parts[2]}))
             else:
                 print("  Usage: state KEY VALUE", file=sys.stderr)
 
         elif cmd == "message":
             text = line.split(" ", 1)[1] if " " in line else "Hello from push server"
-            await push_to_all(msg_reliable_message(text))
+            await _push(msg_reliable_message(text))
             print(f"  → reliable message: {text}", file=sys.stderr)
 
         elif cmd == "try-invite":
@@ -1210,7 +1274,7 @@ async def stdin_loop():
                     "partyQueueMode": mode,
                 },
             })
-            await push_to_all(old_msg)
+            await _push(old_msg)
             print(f"  → old-schema invite from {name} (compare with party-invite)", file=sys.stderr)
 
         elif cmd == "try-field":
@@ -1220,7 +1284,7 @@ async def stdin_loop():
                 json_str = line.split(" ", 2)[2]
                 try:
                     val = json.loads(json_str)
-                    await push_to_all(_wrap_push({key: val}))
+                    await _push(_wrap_push({key: val}))
                     print(f"  → sent {key}: {json_str[:100]}", file=sys.stderr)
                 except json.JSONDecodeError as e:
                     print(f"  Bad JSON: {e}", file=sys.stderr)
@@ -1233,7 +1297,7 @@ async def stdin_loop():
                 states = {}
                 for i in range(1, len(parts), 2):
                     states[parts[i]] = parts[i + 1]
-                await push_to_all(msg_state_update(states))
+                await _push(msg_state_update(states))
                 print(f"  → stateUpdate: {states}", file=sys.stderr)
             else:
                 print("  Usage: try-states KEY1 VAL1 KEY2 VAL2 ...", file=sys.stderr)
@@ -1244,7 +1308,7 @@ async def stdin_loop():
                 json_str = line.split(" ", 1)[1]
                 try:
                     val = json.loads(json_str)
-                    await push_to_all(_wrap_push({"quintPartyStateUpdate": val}))
+                    await _push(_wrap_push({"quintPartyStateUpdate": val}))
                     print(f"  → raw quintPartyStateUpdate sent", file=sys.stderr)
                 except json.JSONDecodeError as e:
                     print(f"  Bad JSON: {e}", file=sys.stderr)
@@ -1257,14 +1321,14 @@ async def stdin_loop():
         elif line.startswith("rawraw "):
             try:
                 data = json.loads(line[7:])
-                await push_to_all(data)
+                await _push(data)
             except json.JSONDecodeError as e:
                 print(f"  Bad JSON: {e}", file=sys.stderr)
 
         elif line.startswith("{"):
             try:
                 inner = json.loads(line)
-                await push_to_all(_wrap_push(inner))
+                await _push(_wrap_push(inner))
             except json.JSONDecodeError as e:
                 print(f"  Bad JSON: {e}", file=sys.stderr)
 
@@ -1340,11 +1404,11 @@ async def stdin_loop():
         # Legacy aliases (backwards compat)
         # ────────────────────────────────────────
         elif cmd == "friends":
-            await push_to_all(msg_friends_list_update())
+            await _push(msg_friends_list_update())
 
         elif cmd == "presence":
             if len(parts) == 3:
-                await push_to_all(msg_presence_update(parts[1], parts[2]))
+                await _push(msg_presence_update(parts[1], parts[2]))
             else:
                 print("  Usage: presence UUID online|offline|in_match", file=sys.stderr)
 

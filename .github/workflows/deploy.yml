@@ -48,27 +48,22 @@ jobs:
             echo "=== Building and starting containers ==="
             docker compose -f server/docker-compose.yml up --build -d --remove-orphans
 
-            echo "=== Waiting for container to be running ==="
-            MAX_WAIT=60
+            echo "=== Waiting for containers to be running ==="
+            MAX_WAIT=90
             ELAPSED=0
             while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
-              CONTAINER_ID="$(docker compose -f server/docker-compose.yml ps -q vg-server || true)"
-              if [ -n "$CONTAINER_ID" ]; then
-                STATUS="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_ID" 2>/dev/null || echo missing)"
-                echo "[$ELAPSED s] Container status: $STATUS"
-                if [ "$STATUS" = "running" ]; then
-                  break
-                fi
-              else
-                echo "[$ELAPSED s] Container not created yet"
+              RUNNING=$(docker compose -f server/docker-compose.yml ps --status running -q 2>/dev/null | wc -l | tr -d ' ')
+              TOTAL=$(docker compose -f server/docker-compose.yml ps -q 2>/dev/null | wc -l | tr -d ' ')
+              echo "[$ELAPSED s] Running: $RUNNING / $TOTAL"
+              if [ "$RUNNING" -ge 4 ]; then
+                break
               fi
-
               sleep 5
               ELAPSED=$((ELAPSED + 5))
             done
 
-            if [ -z "${CONTAINER_ID:-}" ] || [ "${STATUS:-missing}" != "running" ]; then
-              echo "Deployment failed: vg-server container is not running"
+            if [ "$RUNNING" -lt 4 ]; then
+              echo "Deployment failed: not all containers running"
               docker compose -f server/docker-compose.yml ps
               docker compose -f server/docker-compose.yml logs --tail=200
               exit 1
@@ -91,7 +86,7 @@ jobs:
             echo "=== Checking container status ==="
             docker compose -f server/docker-compose.yml ps
 
-            PORTS="443 8000 2112 9000"
+            PORTS="443 8000 2112 9000 80 3000"
             for PORT in $PORTS; do
               echo "Checking port ${PORT}..."
               if ! timeout 5 bash -lc ">/dev/tcp/127.0.0.1/${PORT}"; then

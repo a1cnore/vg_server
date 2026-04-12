@@ -8,8 +8,19 @@ fi
 export VG_HOST_IP
 export VG_GAME_PROXY_PORT="${VG_GAME_PROXY_PORT:-9000}"
 export VG_LOG_DIR="${VG_LOG_DIR:-/app/data}"
+export DATABASE_URL="${DATABASE_URL:-postgres://vg:vg@postgres:5432/vg}"
 
 mkdir -p "$VG_LOG_DIR/matches"
+
+# Wait for Postgres
+if [ -n "$DATABASE_URL" ]; then
+    echo "[vg-server] waiting for Postgres..."
+    for i in $(seq 1 30); do
+        python3 -c "import psycopg2; psycopg2.connect('$DATABASE_URL')" 2>/dev/null && break
+        sleep 1
+    done
+    echo "[vg-server] Postgres ready"
+fi
 
 echo "=========================================="
 echo " VG Server"
@@ -17,6 +28,7 @@ echo "=========================================="
 echo " HOST_IP:         $VG_HOST_IP"
 echo " GAME_PROXY_PORT: $VG_GAME_PROXY_PORT"
 echo " LOG_DIR:         $VG_LOG_DIR"
+echo " DATABASE_URL:    ${DATABASE_URL:+set}"
 echo " Ports:           443, 8000, 2112, $VG_GAME_PROXY_PORT"
 echo "=========================================="
 

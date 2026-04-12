@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+import queue as _queue
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,6 +22,12 @@ import socket
 from mitmproxy import http, tls, connection, ctx
 
 from vg_game_proxy import start_match_proxy, stop_match_proxy, _force_key_mode
+
+try:
+    import vg_db
+except ImportError:
+    vg_db = None
+    print("[vg_interceptor] WARNING: vg_db not available, DB logging disabled", file=sys.stderr)
 
 # Set VG_FORCE_KEY=1 to enable force-key mode on the game proxy
 import vg_game_proxy
@@ -43,11 +51,57 @@ HOST_IP = os.environ.get("VG_HOST_IP", "192.168.64.1")
 GAME_PROXY_PORT = int(os.environ.get("VG_GAME_PROXY_PORT", "0"))
 _dns_cache: dict[str, str] = {}
 
-# Match tracking state
-_current_match_id: str | None = None
-_current_match_state: str | None = None
-_current_game_host: str | None = None
-_current_game_port: int | None = None
+# MARK: - Per-session state (keyed by client IP for multi-user support)
+
+_sessions: dict[str, dict] = {}
+
+
+def _get_session(client_ip):
+    """Return or create a per-user session dict keyed by client IP."""
+    sess = _sessions.get(client_ip)
+    if sess is None:
+        sess = {
+            "client_ip": client_ip,
+            "player_uuid": "b64d1fb9-8287-4702-bad4-2f77dd941d9a",
+            "player_handle": "vphone",
+            "user_id": None,
+            "current_match_id": None,
+            "current_match_state": None,
+            "current_game_host": None,
+            "current_game_port": None,
+            "party_uuid": None,
+            "party_members": [],
+        }
+        _sessions[client_ip] = sess
+        print(f"[vg_interceptor] new session for {client_ip}", file=sys.stderr)
+    return sess
+
+
+# MARK: - Background DB log queue
+
+_db_queue = _queue.Queue()
+
+
+def _db_worker():
+    """Background thread that drains the DB log queue."""
+    while True:
+        try:
+            fn, args, kwargs = _db_queue.get()
+            if fn is None:
+                break
+            fn(*args, **kwargs)
+        except Exception as e:
+            print(f"[vg_interceptor] DB worker error: {e}", file=sys.stderr)
+
+
+_db_thread = threading.Thread(target=_db_worker, daemon=True)
+_db_thread.start()
+
+
+def _db_enqueue(fn, *args, **kwargs):
+    """Enqueue a DB call to run in the background thread."""
+    if vg_db is not None:
+        _db_queue.put((fn, args, kwargs))
 
 LOG_BASE = Path(os.environ.get("VG_LOG_DIR", Path(__file__).parent))
 LOG_DIR = LOG_BASE
@@ -146,13 +200,8 @@ EXTRACTORS = {
 import time as _time
 import uuid as _uuid
 
-# Track logged-in player UUID (set during startSessionForPlayer)
-_player_uuid: str = "b64d1fb9-8287-4702-bad4-2f77dd941d9a"
-_player_handle: str = "vphone"
-
-# ── Party state (synthetic) ──
-_party_uuid: str | None = None
-_party_members: list[dict] = []
+# NOTE: Per-user state (_player_uuid, _player_handle, _party_uuid, _party_members)
+# is now stored in _sessions[client_ip] — see _get_session() above.
 
 
 def _make_leader(handle, player_uuid, score, skill_tier=12, level=30, rank=0):
@@ -332,6 +381,10 @@ class VGInterceptor:
         if not is_vg_domain(host):
             return
 
+        # Get client IP for per-user session lookup
+        client_ip = flow.client_conn.address[0] if flow.client_conn and flow.client_conn.address else "unknown"
+        session = _get_session(client_ip)
+
         url = flow.request.pretty_url
         path = flow.request.path
         status = flow.response.status_code if flow.response else 0
@@ -351,9 +404,9 @@ class VGInterceptor:
 
         # MARK: - Response modification
         if isinstance(res_body, dict):
-            modified = self._modify_response(method, res_body)
+            modified = self._modify_response(method, res_body, session)
             # Track match lifecycle and rewrite game server host
-            modified |= self._track_match(method, res_body)
+            modified |= self._track_match(method, res_body, session)
             if modified:
                 flow.response.set_content(json.dumps(res_body).encode("utf-8"))
                 print(f"\033[33m[MODIFIED]\033[0m {method}", file=sys.stderr)
@@ -364,8 +417,9 @@ class VGInterceptor:
         if extractor and isinstance(res_body, dict):
             extracted = extractor(res_body)
 
+        ts = now_iso()
         entry = {
-            "ts": now_iso(),
+            "ts": ts,
             "method": method,
             "category": category,
             "url": url,
@@ -379,7 +433,14 @@ class VGInterceptor:
         self._write_log(entry)
         self._print_summary(method, category, status, extracted)
 
-    def _modify_response(self, method: str, res: dict) -> bool:
+        # Log to DB in background
+        _db_enqueue(
+            _safe_insert_rpc_log,
+            session.get("user_id"), ts, method, category, status,
+            url, host, req_body, res_body, extracted or None,
+        )
+
+    def _modify_response(self, method: str, res: dict, session: dict) -> bool:
         """Modify response data in-place. Returns True if modified."""
         # Patches to apply to playerInfo wherever it appears
         PLAYER_PATCHES = {
@@ -541,7 +602,7 @@ class VGInterceptor:
                 if "notifyUrl" in rv:
                     old_url = rv["notifyUrl"]
                     # Extract playerUUID path from ws://host:port/ws/<uuid>
-                    ws_path = old_url.rsplit("/", 1)[-1] if "/" in old_url else _player_uuid
+                    ws_path = old_url.rsplit("/", 1)[-1] if "/" in old_url else session["player_uuid"]
                     rv["notifyUrl"] = f"ws://{HOST_IP}:2112/ws/{ws_path}"
                     rv["notifyFallbackUrl"] = f"http://{HOST_IP}:2112/lp/{ws_path}"
                     print(f"\033[35m[FEATURE]\033[0m notifyUrl: {old_url} -> {rv['notifyUrl']}", file=sys.stderr)
@@ -611,17 +672,16 @@ class VGInterceptor:
                         talent["level"] = 20
                 modified = True
 
-        modified |= self._inject_social_data(method, res)
+        modified |= self._inject_social_data(method, res, session)
 
         return modified
 
-    def _inject_social_data(self, method: str, res: dict) -> bool:
+    def _inject_social_data(self, method: str, res: dict, session: dict) -> bool:
         """Inject fake friends/leaderboard/live-event data into empty responses.
 
         The E.V.I.L. engine hides UI panels when the server returns empty data.
         By injecting synthetic entries, we force the panels to render.
         """
-        global _player_uuid
         modified = False
 
         # ── Track player UUID/handle from session bootstrap ──
@@ -630,10 +690,16 @@ class VGInterceptor:
             if isinstance(rv, dict):
                 uuid = rv.get("playerUUID")
                 if uuid:
-                    _player_uuid = uuid
+                    session["player_uuid"] = uuid
                 handle = rv.get("handle")
                 if handle:
-                    _player_handle = handle
+                    session["player_handle"] = handle
+                # Register user in DB
+                _db_enqueue(
+                    _safe_upsert_user,
+                    session["player_uuid"], session["player_handle"],
+                    session["client_ip"], session,
+                )
 
         # ── Leaderboard injection ──
         # Server returns {"returnValue": {}} when feature is disabled server-side.
@@ -649,7 +715,7 @@ class VGInterceptor:
                 leaders = [dict(e) for e in FAKE_LEADERS]
                 for e in leaders:
                     if e["playerUUID"] == "PLACEHOLDER":
-                        e["playerUUID"] = _player_uuid
+                        e["playerUUID"] = session["player_uuid"]
                 res["returnValue"] = {
                     "events": [
                         {
@@ -800,91 +866,92 @@ class VGInterceptor:
         # ── Party system ──
         # Schema from FUN_10050b6a8: returnValue.{success, partyUUID, partyQueueMode,
         #   partyQueueDifficulty, members[{uuid, handle, isDev, isCaptain, status, team, slot, qbanLevel}]}
-        modified |= self._handle_party(method, res)
+        modified |= self._handle_party(method, res, session)
 
         # ── Dead endpoint catch-all ──
         # For any RPC the server returns empty/error, give a valid response
         # so the client parser doesn't choke.
-        modified |= self._handle_dead_endpoint(method, res)
+        modified |= self._handle_dead_endpoint(method, res, session)
 
         return modified
 
-    def _handle_party(self, method: str, res: dict) -> bool:
+    def _handle_party(self, method: str, res: dict, session: dict) -> bool:
         """Handle party system RPCs with synthetic responses."""
-        global _party_uuid, _party_members
+        _player_handle = session["player_handle"]
+        _player_uuid = session["player_uuid"]
 
         if method == "createParty":
-            _party_uuid = str(_uuid.uuid4())
-            _party_members = [_make_party_member(_player_handle, _player_uuid, is_captain=True)]
+            session["party_uuid"] = str(_uuid.uuid4())
+            session["party_members"] = [_make_party_member(_player_handle, _player_uuid, is_captain=True)]
             res["returnValue"] = {
                 "success": True,
-                "partyUUID": _party_uuid,
+                "partyUUID": session["party_uuid"],
                 "partyQueueMode": "casual_5v5",
                 "partyQueueDifficulty": 0,
-                "members": list(_party_members),
+                "members": list(session["party_members"]),
             }
             res["code"] = 0
-            print(f"\033[35m[PARTY]\033[0m createParty: {_party_uuid[:8]}", file=sys.stderr)
+            print(f"\033[35m[PARTY]\033[0m createParty: {session['party_uuid'][:8]}", file=sys.stderr)
             return True
 
         if method == "createQuintParty":
-            _party_uuid = str(_uuid.uuid4())
-            _party_members = [_make_party_member(_player_handle, _player_uuid, is_captain=True)]
+            session["party_uuid"] = str(_uuid.uuid4())
+            session["party_members"] = [_make_party_member(_player_handle, _player_uuid, is_captain=True)]
             res["returnValue"] = {
                 "success": True,
-                "partyUUID": _party_uuid,
+                "partyUUID": session["party_uuid"],
                 "partyQueueMode": "casual_5v5",
                 "partyQueueDifficulty": 0,
-                "members": list(_party_members),
+                "members": list(session["party_members"]),
             }
             res["code"] = 0
-            print(f"\033[35m[PARTY]\033[0m createQuintParty: {_party_uuid[:8]}", file=sys.stderr)
+            print(f"\033[35m[PARTY]\033[0m createQuintParty: {session['party_uuid'][:8]}", file=sys.stderr)
             return True
 
         if method in ("partyMembers", "queryPartyInfo", "queryPartyInvites"):
             res["returnValue"] = {
                 "success": True,
-                "partyUUID": _party_uuid or "",
+                "partyUUID": session["party_uuid"] or "",
                 "partyQueueMode": "casual_5v5",
                 "partyQueueDifficulty": 0,
-                "members": list(_party_members),
+                "members": list(session["party_members"]),
             }
             res["code"] = 0
-            print(f"\033[35m[PARTY]\033[0m {method}: {len(_party_members)} members", file=sys.stderr)
+            print(f"\033[35m[PARTY]\033[0m {method}: {len(session['party_members'])} members", file=sys.stderr)
             return True
 
         if method == "partyInviteSend":
             # Pretend it worked — add a fake member to the party
             fake_member = _make_party_member(
-                "TakaJungle", str(_uuid.uuid4()), is_captain=False, team=0, slot=len(_party_members))
-            _party_members.append(fake_member)
+                "TakaJungle", str(_uuid.uuid4()), is_captain=False, team=0, slot=len(session["party_members"]))
+            session["party_members"].append(fake_member)
             res["returnValue"] = {
                 "success": True,
-                "partyUUID": _party_uuid or "",
+                "partyUUID": session["party_uuid"] or "",
                 "partyQueueMode": "casual_5v5",
                 "partyQueueDifficulty": 0,
-                "members": list(_party_members),
+                "members": list(session["party_members"]),
             }
             res["code"] = 0
-            print(f"\033[35m[PARTY]\033[0m partyInviteSend: now {len(_party_members)} members", file=sys.stderr)
+            print(f"\033[35m[PARTY]\033[0m partyInviteSend: now {len(session['party_members'])} members", file=sys.stderr)
             return True
 
         if method in ("partyInviteConfirm", "partyInviteReject", "partyMemberKick",
                        "partyMemberMove", "partyChangeQueueMode", "partyBalanceTeams"):
             res["returnValue"] = {
                 "success": True,
-                "partyUUID": _party_uuid or "",
+                "partyUUID": session["party_uuid"] or "",
                 "partyQueueMode": "casual_5v5",
                 "partyQueueDifficulty": 0,
-                "members": list(_party_members),
+                "members": list(session["party_members"]),
             }
             res["code"] = 0
             print(f"\033[35m[PARTY]\033[0m {method}: ok", file=sys.stderr)
             return True
 
         if method in ("leaveParty", "destroyQuintParty", "leaveQuintParty"):
-            _party_uuid = None
-            _party_members = []
+            session["party_uuid"] = None
+            session["party_members"] = []
             res["returnValue"] = True
             res["code"] = 0
             print(f"\033[35m[PARTY]\033[0m {method}: party dissolved", file=sys.stderr)
@@ -893,10 +960,10 @@ class VGInterceptor:
         if method in ("joinQuintParty", "updateQuintPartyState"):
             res["returnValue"] = {
                 "success": True,
-                "partyUUID": _party_uuid or str(_uuid.uuid4()),
+                "partyUUID": session["party_uuid"] or str(_uuid.uuid4()),
                 "partyQueueMode": "casual_5v5",
                 "partyQueueDifficulty": 0,
-                "members": list(_party_members) if _party_members else [
+                "members": list(session["party_members"]) if session["party_members"] else [
                     _make_party_member(_player_handle, _player_uuid, is_captain=True)
                 ],
             }
@@ -912,7 +979,7 @@ class VGInterceptor:
 
         return False
 
-    def _handle_dead_endpoint(self, method: str, res: dict) -> bool:
+    def _handle_dead_endpoint(self, method: str, res: dict, session: dict) -> bool:
         """Catch-all: return valid responses for dead endpoints the client may call.
 
         Response types from RE analysis (GhidraRpcSchemaExtractor):
@@ -1012,8 +1079,8 @@ class VGInterceptor:
             if rv is None or (isinstance(rv, dict) and not rv):
                 res["code"] = 0
                 res["returnValue"] = {
-                    "handle": _player_handle,
-                    "playerUUID": _player_uuid,
+                    "handle": session["player_handle"],
+                    "playerUUID": session["player_uuid"],
                     "skillTier": 29,
                     "level": 30,
                     "wins": 20000,
@@ -1026,9 +1093,8 @@ class VGInterceptor:
 
         return False
 
-    def _track_match(self, method: str, res: dict) -> bool:
+    def _track_match(self, method: str, res: dict, session: dict) -> bool:
         """Track match lifecycle and rewrite game server host for interception."""
-        global _current_match_id, _current_match_state, _current_game_host, _current_game_port
         modified = False
 
         rv = res.get("returnValue", res)
@@ -1040,9 +1106,9 @@ class VGInterceptor:
             return False
 
         # Detect state transitions
-        if state != _current_match_state:
-            prev = _current_match_state
-            _current_match_state = state
+        if state != session["current_match_state"]:
+            prev = session["current_match_state"]
+            session["current_match_state"] = state
             print(f"\033[36m[MATCH]\033[0m state: {prev} -> {state}", file=sys.stderr)
 
         # When match starts playing, capture game server info and start proxy
@@ -1051,11 +1117,11 @@ class VGInterceptor:
         game_port = rv.get("port")
 
         if state == "playing" and game_host and game_port and match_id:
-            if match_id != _current_match_id:
+            if match_id != session["current_match_id"]:
                 # New match — start game proxy
-                _current_match_id = match_id
-                _current_game_host = game_host
-                _current_game_port = game_port
+                session["current_match_id"] = match_id
+                session["current_game_host"] = game_host
+                session["current_game_port"] = game_port
 
                 # Log the FULL original update response for key analysis
                 # The encryption key might be in a field we're not tracking
@@ -1069,42 +1135,81 @@ class VGInterceptor:
                         print(f"\033[36m[MATCH]\033[0m   EXTRA FIELD rv.{k} = {str(v)[:200]}", file=sys.stderr)
                 listen_port = GAME_PROXY_PORT if GAME_PROXY_PORT else game_port
                 try:
-                    start_match_proxy(match_id, game_host, game_port, listen_port)
+                    proxy = start_match_proxy(
+                        match_id, game_host, game_port, listen_port,
+                        user_id=session.get("user_id"),
+                    )
+                    # If dynamic port allocation, read the actual port
+                    if listen_port == 0:
+                        listen_port = proxy.listen_port
                 except Exception as e:
                     print(f"\033[31m[MATCH]\033[0m proxy start failed: {e}", file=sys.stderr)
 
+                # DB match record is created by start_match_proxy() above.
                 # Match RPC data is saved by vg_game_proxy in its match dir
 
             # Rewrite host and port to our proxy
             listen_port = GAME_PROXY_PORT if GAME_PROXY_PORT else game_port
+            # Re-read actual port from proxy if dynamic
+            if listen_port == 0:
+                proxy = _active_proxies_ref().get(match_id)
+                if proxy:
+                    listen_port = proxy.listen_port
             rv["host"] = HOST_IP
             rv["port"] = listen_port
             print(f"\033[36m[MATCH]\033[0m rewrite: {game_host}:{game_port} -> {HOST_IP}:{listen_port}", file=sys.stderr)
             modified = True
 
         # Match ended
-        if state in ("post_match", "menus") and _current_match_id:
-            ended_id = _current_match_id
+        if state in ("post_match", "menus") and session["current_match_id"]:
+            ended_id = session["current_match_id"]
             print(f"\033[36m[MATCH]\033[0m ended {ended_id[:8]}", file=sys.stderr)
             try:
                 stop_match_proxy(ended_id)
             except Exception:
                 pass
-            _current_match_id = None
-            _current_game_host = None
-            _current_game_port = None
+            # DB match status updated by game proxy's stop() method
+            session["current_match_id"] = None
+            session["current_game_host"] = None
+            session["current_game_port"] = None
 
         return modified
 
     def done(self):
         self._log_handle.close()
-        # Clean up any active match proxies
-        if _current_match_id:
-            try:
-                stop_match_proxy(_current_match_id)
-            except Exception:
-                pass
+        # Clean up any active match proxies across all sessions
+        for sess in _sessions.values():
+            mid = sess.get("current_match_id")
+            if mid:
+                try:
+                    stop_match_proxy(mid)
+                except Exception:
+                    pass
+        # Signal DB worker to stop
+        _db_queue.put((None, None, None))
         print(f"\n[vg_interceptor] {self._count} VG requests logged to {LOG_FILE}", file=sys.stderr)
+
+
+# MARK: - Safe DB wrappers (never crash the proxy)
+
+def _active_proxies_ref():
+    """Access vg_game_proxy's active proxies registry."""
+    return vg_game_proxy._active_proxies
+
+
+def _safe_upsert_user(player_uuid, handle, client_ip, session):
+    try:
+        user_id = vg_db.upsert_user(player_uuid, handle, client_ip)
+        session["user_id"] = user_id
+    except Exception as e:
+        print(f"[vg_interceptor] DB upsert_user error: {e}", file=sys.stderr)
+
+
+def _safe_insert_rpc_log(user_id, ts, method, category, status, url, host, req, res, extracted):
+    try:
+        vg_db.insert_rpc_log(user_id, ts, method, category, status, url, host, req, res, extracted)
+    except Exception as e:
+        print(f"[vg_interceptor] DB insert_rpc_log error: {e}", file=sys.stderr)
 
 
 addons = [VGInterceptor()]
