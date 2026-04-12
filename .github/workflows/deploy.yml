@@ -1,0 +1,104 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - production
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -euo pipefail
+
+            cd "${{ secrets.DEPLOY_PATH }}"
+
+            echo "=== Pulling latest code ==="
+            git fetch origin production
+            git reset --hard origin/production
+
+            echo "=== Ensuring runtime directories exist ==="
+            mkdir -p server/data server/data/matches
+
+            if [ -n "${{ secrets.VG_HOST_IP }}" ]; then
+              export VG_HOST_IP="${{ secrets.VG_HOST_IP }}"
+            fi
+
+            if [ -n "${{ secrets.VG_GAME_PROXY_PORT }}" ]; then
+              export VG_GAME_PROXY_PORT="${{ secrets.VG_GAME_PROXY_PORT }}"
+            fi
+
+            echo "=== Building and starting containers ==="
+            docker compose -f server/docker-compose.yml up --build -d --remove-orphans
+
+            echo "=== Waiting for container to be running ==="
+            MAX_WAIT=60
+            ELAPSED=0
+            while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+              CONTAINER_ID="$(docker compose -f server/docker-compose.yml ps -q vg-server || true)"
+              if [ -n "$CONTAINER_ID" ]; then
+                STATUS="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_ID" 2>/dev/null || echo missing)"
+                echo "[$ELAPSED s] Container status: $STATUS"
+                if [ "$STATUS" = "running" ]; then
+                  break
+                fi
+              else
+                echo "[$ELAPSED s] Container not created yet"
+              fi
+
+              sleep 5
+              ELAPSED=$((ELAPSED + 5))
+            done
+
+            if [ -z "${CONTAINER_ID:-}" ] || [ "${STATUS:-missing}" != "running" ]; then
+              echo "Deployment failed: vg-server container is not running"
+              docker compose -f server/docker-compose.yml ps
+              docker compose -f server/docker-compose.yml logs --tail=200
+              exit 1
+            fi
+
+            echo "=== Deployment complete ==="
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -euo pipefail
+
+            cd "${{ secrets.DEPLOY_PATH }}"
+
+            echo "=== Checking container status ==="
+            docker compose -f server/docker-compose.yml ps
+
+            PORTS="443 8000 2112 9000"
+            for PORT in $PORTS; do
+              echo "Checking port ${PORT}..."
+              if ! timeout 5 bash -lc ">/dev/tcp/127.0.0.1/${PORT}"; then
+                echo "Port ${PORT} is not accepting connections"
+                docker compose -f server/docker-compose.yml logs --tail=200
+                exit 1
+              fi
+            done
+
+            echo "Deployment verification successful"
