@@ -1,0 +1,14 @@
+services:
+  vg-server:
+    build: .
+    ports:
+      - "443:443"
+      - "8000:8000"
+      - "2112:2112"
+      - "9000:9000"
+    environment:
+      - VG_HOST_IP=${VG_HOST_IP:-192.168.64.1}
+      - VG_GAME_PROXY_PORT=9000
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
