@@ -142,13 +142,13 @@ function Fragment({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <div className="text-[10px] uppercase text-text-dim mb-1">Request</div>
-                <pre className="font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all max-h-40 overflow-auto">
+                <pre className="font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all max-h-96 overflow-auto">
                   {JSON.stringify(log.req, null, 2)}
                 </pre>
               </div>
               <div>
                 <div className="text-[10px] uppercase text-text-dim mb-1">Response</div>
-                <pre className="font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all max-h-40 overflow-auto">
+                <pre className="font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all max-h-96 overflow-auto">
                   {JSON.stringify(log.res, null, 2)}
                 </pre>
               </div>

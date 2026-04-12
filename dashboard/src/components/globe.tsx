@@ -49,7 +49,7 @@ export function Globe({ users }: { users: GlobeUser[] }) {
           const u = d as GlobeUser;
           return `${u.playerHandle}${u.country ? ` (${u.country})` : ""}`;
         }}
-        height={400}
+        height={600}
       />
     </div>
   );
