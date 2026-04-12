@@ -610,6 +610,28 @@ async def handle_connection(reader: asyncio.StreamReader, writer: asyncio.Stream
 
     request_text = request.decode("utf-8", errors="replace")
 
+    # POST /push — HTTP control endpoint for sending pushes
+    first_line = request_text.split("\r\n")[0] if request_text else ""
+    if first_line.startswith("POST /push"):
+        # Read the body
+        content_length = 0
+        for line in request_text.split("\r\n"):
+            if line.lower().startswith("content-length:"):
+                content_length = int(line.split(":", 1)[1].strip())
+        body_data = b""
+        if content_length > 0:
+            body_data = await asyncio.wait_for(reader.read(content_length), timeout=5)
+        try:
+            push_data = json.loads(body_data)
+            await push_to_all(push_data)
+            resp_body = b'{"ok":true}'
+        except Exception as e:
+            resp_body = json.dumps({"ok": False, "error": str(e)}).encode()
+        writer.write(f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(resp_body)}\r\n\r\n".encode() + resp_body)
+        await writer.drain()
+        writer.close()
+        return
+
     # Check for WebSocket upgrade
     if "upgrade: websocket" not in request_text.lower():
         # HTTP long-poll fallback

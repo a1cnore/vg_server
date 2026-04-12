@@ -247,6 +247,8 @@ def _make_party_member(handle, player_uuid, is_captain=False, team=0, slot=0):
 # MARK: - Helpers
 
 def is_vg_domain(host: str) -> bool:
+    if host.split(":")[0] == HOST_IP:
+        return True
     return any(pattern in host for pattern in VG_DOMAIN_PATTERNS)
 
 def extract_method_from_url(path: str) -> str | None:
@@ -546,6 +548,13 @@ class VGInterceptor:
                 print(f"\033[35m[FEATURE]\033[0m enableStateUpdates: true", file=sys.stderr)
                 changed = True
 
+            # Rewrite platformUrl so all post-session RPC goes through our proxy
+            old_platform_url = rv.get("platformUrl")
+            if isinstance(old_platform_url, str) and HOST_IP not in old_platform_url:
+                rv["platformUrl"] = f"https://{HOST_IP}"
+                print(f"\033[35m[FEATURE]\033[0m platformUrl: {old_platform_url} -> {rv['platformUrl']}", file=sys.stderr)
+                changed = True
+
             # Patch seasonalData — season ended 2020-04-09, extend to future
             # so the client doesn't think ranked is expired.
             # Parser reads endSeasonEpoch and seasonIndex from constants.seasonalData.
@@ -568,6 +577,12 @@ class VGInterceptor:
         # Patch returnValue.playerInfo (startSessionForPlayer, getPlayerInfo)
         rv = res.get("returnValue", res)
         if isinstance(rv, dict):
+            # Rewrite startSessionUrl so all subsequent RPC goes through our proxy
+            old_session_url = rv.get("startSessionUrl")
+            if isinstance(old_session_url, str) and HOST_IP not in old_session_url:
+                rv["startSessionUrl"] = f"https://{HOST_IP}"
+                print(f"\033[33m[PATCH]\033[0m startSessionUrl: {old_session_url} -> {rv['startSessionUrl']}", file=sys.stderr)
+                modified = True
             pi = rv.get("playerInfo")
             if isinstance(pi, dict):
                 modified |= patch_player_info(pi)
@@ -586,6 +601,15 @@ class VGInterceptor:
             modified |= patch_player_info(pi)
 
         # MARK: - Inject data for empty responses (engine hides panels with no data)
+
+        # Patch getTalentsData — max out all talent levels
+        if method == "getTalentsData":
+            rv = res.get("returnValue")
+            if isinstance(rv, dict):
+                for talent in rv.values():
+                    if isinstance(talent, dict) and "level" in talent:
+                        talent["level"] = 20
+                modified = True
 
         modified |= self._inject_social_data(method, res)
 
