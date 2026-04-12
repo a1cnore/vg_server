@@ -268,27 +268,28 @@ class MatchProxy:
                     try:
                         self._analyze_packet(data)
                     except Exception as e:
-                        # Never crash the relay for analysis errors
-                        pass
+                        print(f"[game_proxy] _analyze_packet error: {e}", file=sys.stderr)
         except (ConnectionError, OSError):
             pass
 
     def _advance_handshake(self, direction: str, data: bytes):
         """Track which phase of the handshake we're in."""
         if self._handshake_phase == 0 and direction == "C->S" and len(data) == 136:
-            # HANDSHAKE_HELLO sent
             self._handshake_phase = 1
         elif self._handshake_phase == 1 and direction == "S->C" and len(data) == 5:
-            # HANDSHAKE_ACK received
             self._handshake_phase = 2
         elif self._handshake_phase == 2 and direction == "C->S" and len(data) == 74:
-            # AUTH_TOKEN sent (already modified if force_key)
             self._handshake_phase = 3
         elif self._handshake_phase == 3 and direction == "S->C" and len(data) == 106:
-            # SERVER_HELLO received
             self._handshake_phase = 4
+            print(f"[game_proxy] handshake complete (phase 4), analysis active", file=sys.stderr)
             if self.force_key:
                 self._check_server_hello(data)
+        # Fallback: if we've seen enough packets and are still stuck, force phase 4
+        # The handshake is always exactly 4 packets, so after packet 5+ we're in game data
+        if self._handshake_phase < 4 and self._packet_count >= 5:
+            print(f"[game_proxy] forcing handshake phase 4 after {self._packet_count} packets (was phase {self._handshake_phase})", file=sys.stderr)
+            self._handshake_phase = 4
 
     def _rewrite_auth_token(self, data: bytes) -> bytes:
         """Replace AUTH_TOKEN auth data with zeros and recompute zeros pattern.
@@ -364,8 +365,15 @@ class MatchProxy:
         if len(data) < 4:
             return
         msgs = _split_and_decrypt(self._cipher, data)
+        if not msgs:
+            return
         now = time.time()
         match_time = now - self._start_time
+
+        # Log first few analysis results for debugging
+        if self._packet_count <= 10:
+            opcodes = [op for op, _ in msgs]
+            print(f"[game_proxy] analyze pkt#{self._packet_count}: {len(msgs)} msgs, opcodes={opcodes[:8]}", file=sys.stderr)
 
         for opcode, payload in msgs:
             if opcode == 1006 and len(payload) >= 164:
