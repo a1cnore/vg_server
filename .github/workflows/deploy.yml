@@ -45,6 +45,15 @@ jobs:
               export VG_GAME_PROXY_PORT="${{ secrets.VG_GAME_PROXY_PORT }}"
             fi
 
+            echo "=== Ensuring DB schema exists ==="
+            # If the users table doesn't exist, reset the postgres volume so init.sql runs
+            if docker compose -f server/docker-compose.yml exec -T postgres psql -U vg -d vg -c '\dt users' 2>/dev/null | grep -q users; then
+              echo "DB schema OK"
+            else
+              echo "DB schema missing, resetting postgres volume..."
+              docker compose -f server/docker-compose.yml down -v --remove-orphans 2>/dev/null || true
+            fi
+
             echo "=== Building and starting containers ==="
             docker compose -f server/docker-compose.yml up --build -d --remove-orphans
 
