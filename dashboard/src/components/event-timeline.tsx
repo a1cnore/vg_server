@@ -11,6 +11,7 @@ const typeColor: Record<string, string> = {
   death: "text-accent-red",
   level: "text-accent-gold",
   item: "text-text-dim",
+  hit: "text-orange-400",
   respawn: "text-accent-blue",
 };
 

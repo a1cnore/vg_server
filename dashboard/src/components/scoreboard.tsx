@@ -13,6 +13,7 @@ interface Player {
   posX: number;
   posY: number;
   itemsBought: number;
+  inCombat: boolean;
 }
 
 const cols = ["Player", "K", "D", "CS", "LVL", "Gold", "XP", "Items", "Pos"];
@@ -38,6 +39,12 @@ function TeamSection({
       {players.map((p) => (
         <tr key={p.slot} className="border-b border-border last:border-b-0 hover:bg-panel/50">
           <td className={cn("px-2 py-1 text-xs truncate max-w-[120px]", color)}>
+            <span
+              className={cn(
+                "inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle",
+                p.inCombat ? "bg-accent-red shadow-[0_0_4px_theme(colors.accent-red)]" : "bg-text-dim"
+              )}
+            />
             {p.handle ?? `Player ${p.slot}`}
           </td>
           <td className="px-2 py-1 font-mono text-xs text-text-primary">{p.kills}</td>

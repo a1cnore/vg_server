@@ -65,6 +65,12 @@ export const matchPlayers = pgTable(
     posX: doublePrecision("pos_x").default(0).notNull(),
     posY: doublePrecision("pos_y").default(0).notNull(),
     itemsBought: integer("items_bought").default(0).notNull(),
+    inCombat: boolean("in_combat").default(false).notNull(),
+    energyRegen: doublePrecision("energy_regen").default(0).notNull(),
+    energyDelta: doublePrecision("energy_delta").default(0).notNull(),
+    hpDelta: doublePrecision("hp_delta").default(0).notNull(),
+    abilityCd: doublePrecision("ability_cd").default(0).notNull(),
+    goldSpent: doublePrecision("gold_spent").default(0).notNull(),
   },
   (t) => [uniqueIndex("match_players_match_slot_idx").on(t.matchId, t.slot)]
 );

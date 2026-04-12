@@ -158,8 +158,9 @@ class MatchProxy:
         }
         # Real-time match analysis state
         self._cipher = make_cipher(match_id)
-        self._entity_map = {}        # entity_id -> {handle, team, slot}
+        self._entity_map = {}        # entity_id -> {handle, team, slot, level, kills, deaths, xp, ...}
         self._last_pos_time = {}     # entity_id -> last position write time
+        self._last_stat_time = {}    # entity_id -> last stat write time
         self._start_time = time.time()
 
     def start(self):
@@ -346,21 +347,34 @@ class MatchProxy:
             sh_path = self.match_dir / "server_hello_forced.bin"
             sh_path.write_bytes(data)
 
+    def _ensure_entity(self, eid, handle="", team=-1, slot=-1):
+        """Get or create entity entry with all stat fields."""
+        if eid in self._entity_map:
+            info = self._entity_map[eid]
+            if handle:
+                info["handle"] = handle
+            if team in (1, 2):
+                info["team"] = team
+            if slot >= 0:
+                info["slot"] = slot
+            return info
+        if slot < 0:
+            slot = len(self._entity_map)
+        info = {
+            "handle": handle, "team": team, "slot": slot,
+            "level": 1, "kills": 0, "deaths": 0, "xp": 0.0,
+            "items_bought": 0, "gold_spent": 0.0,
+        }
+        self._entity_map[eid] = info
+        return info
+
     def _analyze_packet(self, data):
         """Decrypt and parse a server TCP frame for real-time match analysis.
 
         Wire format: raw TCP data contains [2B BE msg_len][encrypted msg_data]...
         Each msg_data after decryption: [2B BE opcode][payload]
 
-        Opcode layout matches vg_dashboard_server.py (big-endian):
-          1006: PlayerInfo — payload[:44]=handle, payload[162:164]=entity_id BE
-          1114: Snapshot — 1B offset + 6x161B records
-          1070: Position — [2B pad][2B eid BE][4B X float BE][4B Y float BE]
-          1074: HeroDeath — [2B pad][2B victim_eid BE]
-          1052: XP/Kill — [2B pad][2B eid BE][4B aux][4B float BE][1B stat_type]
-          1076: LevelUp — [2B pad][2B eid BE]
-          1084: CS — [2B pad][2B eid BE][2B pad][2B cs BE]
-          1093: Gold — [2B pad][2B eid BE][2B pad][2B gold BE]
+        Opcodes match vg_dashboard_server.py (big-endian protocol).
         """
         if len(data) < 4:
             return
@@ -369,6 +383,7 @@ class MatchProxy:
             return
         now = time.time()
         match_time = now - self._start_time
+        _db = vg_db is not None and self.db_match_id is not None
 
         # Log first few analysis results for debugging
         if self._packet_count <= 10:
@@ -376,142 +391,224 @@ class MatchProxy:
             print(f"[game_proxy] analyze pkt#{self._packet_count}: {len(msgs)} msgs, opcodes={opcodes[:8]}", file=sys.stderr)
 
         for opcode, payload in msgs:
-            if opcode == 1006 and len(payload) >= 164:
-                # Player info: handle at [0:44], entity_id at [162:164] BE
-                try:
-                    handle = payload[:44].split(b"\x00")[0].decode("ascii", errors="replace")
-                    eid = struct.unpack(">H", payload[162:164])[0]
-                    if handle and 1000 <= eid <= 2000:
-                        team = payload[210] if len(payload) > 210 and payload[210] in (1, 2) else -1
-                        slot = len(self._entity_map)
-                        self._entity_map[eid] = {"handle": handle, "team": team, "slot": slot}
-                        if vg_db is not None and self.db_match_id is not None:
-                            try:
-                                vg_db.upsert_match_player(self.db_match_id, slot, handle=handle, team=team, entity_id=eid)
-                            except Exception:
-                                pass
-                except (ValueError, struct.error):
-                    pass
+            try:
+                self._handle_opcode(opcode, payload, now, match_time, _db)
+            except Exception as e:
+                if self._packet_count <= 20:
+                    print(f"[game_proxy] opcode {opcode} error: {e}", file=sys.stderr)
 
-            elif opcode == 1114 and len(payload) >= 1 + 6 * 161:
-                # Snapshot: 1B offset + 6x161B records
-                for i in range(6):
-                    off = 1 + i * 161
-                    rec = payload[off:off + 161]
-                    if len(rec) < 161:
-                        break
+    def _handle_opcode(self, opcode, payload, now, match_time, _db):
+        if opcode == 1006 and len(payload) >= 164:
+            # Player info: handle at [0:44], entity_id at [162:164] BE
+            handle = payload[:44].split(b"\x00")[0].decode("ascii", errors="replace")
+            eid = struct.unpack(">H", payload[162:164])[0]
+            if handle and 1000 <= eid <= 2000:
+                team = payload[210] if len(payload) > 210 and payload[210] in (1, 2) else -1
+                info = self._ensure_entity(eid, handle=handle, team=team)
+                if _db:
                     try:
-                        handle = rec[24:56].split(b"\x00")[0].decode("ascii", errors="replace")
-                        eid = struct.unpack(">H", rec[18:20])[0]
-                        team = rec[15]
-                        slot = rec[8] if rec[8] < 6 else i
-                        if eid != 0xFFFF:
-                            self._entity_map[eid] = {"handle": handle, "team": team, "slot": slot}
-                            if vg_db is not None and self.db_match_id is not None:
-                                try:
-                                    vg_db.upsert_match_player(self.db_match_id, slot, handle=handle, team=team, entity_id=eid)
-                                except Exception:
-                                    pass
-                    except (ValueError, struct.error):
+                        vg_db.upsert_match_player(self.db_match_id, info["slot"], handle=handle, team=team, entity_id=eid)
+                    except Exception:
                         pass
 
-            elif opcode == 1070 and len(payload) >= 10:
-                # Position: [2B pad][2B eid BE][4B X float BE][4B Y float BE]
+        elif opcode == 1114 and len(payload) >= 1 + 6 * 161:
+            # Snapshot: 1B offset + 6x161B records
+            for i in range(6):
+                off = 1 + i * 161
+                rec = payload[off:off + 161]
+                if len(rec) < 161:
+                    break
+                handle = rec[24:56].split(b"\x00")[0].decode("ascii", errors="replace")
+                eid = struct.unpack(">H", rec[18:20])[0]
+                team = rec[15]
+                slot = rec[8] if rec[8] < 6 else i
+                if eid != 0xFFFF:
+                    info = self._ensure_entity(eid, handle=handle, team=team, slot=slot)
+                    if _db:
+                        try:
+                            vg_db.upsert_match_player(self.db_match_id, info["slot"], handle=handle, team=team, entity_id=eid)
+                        except Exception:
+                            pass
+
+        elif opcode == 1070 and len(payload) >= 12:
+            # Position: [2B pad][2B eid BE][4B X float BE][4B Y float BE]
+            eid = struct.unpack(">H", payload[2:4])[0]
+            last = self._last_pos_time.get(eid, 0)
+            if now - last >= 2.0:
+                self._last_pos_time[eid] = now
+                x = round(struct.unpack(">f", payload[4:8])[0], 1)
+                y = round(struct.unpack(">f", payload[8:12])[0], 1)
+                info = self._entity_map.get(eid)
+                if info and _db:
+                    try:
+                        vg_db.upsert_match_player(self.db_match_id, info["slot"], pos_x=x, pos_y=y)
+                    except Exception:
+                        pass
+
+        elif opcode == 1074 and len(payload) >= 4:
+            # Hero death: [2B pad][2B victim_eid BE]
+            eid = struct.unpack(">H", payload[2:4])[0]
+            info = self._entity_map.get(eid)
+            if not info:
+                return
+            info["deaths"] += 1
+            handle = info.get("handle", f"entity_{eid}")
+            print(f"\033[31m[MATCH DEATH]\033[0m {handle} died at {match_time:.1f}s", file=sys.stderr)
+            if _db:
                 try:
-                    eid = struct.unpack(">H", payload[2:4])[0]
-                    last = self._last_pos_time.get(eid, 0)
-                    if now - last >= 2.0:
-                        self._last_pos_time[eid] = now
-                        x = round(struct.unpack(">f", payload[4:8])[0], 1)
-                        y = round(struct.unpack(">f", payload[8:12])[0], 1)
-                        info = self._entity_map.get(eid)
-                        if info and vg_db is not None and self.db_match_id is not None:
-                            try:
-                                vg_db.upsert_match_player(self.db_match_id, info["slot"], pos_x=x, pos_y=y)
-                            except Exception:
-                                pass
-                except struct.error:
+                    vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "death", f"{handle} died")
+                    vg_db.upsert_match_player(self.db_match_id, info["slot"], deaths=info["deaths"])
+                except Exception:
                     pass
 
-            elif opcode == 1074 and len(payload) >= 4:
-                # Hero death: [2B pad][2B victim_eid BE]
-                try:
-                    eid = struct.unpack(">H", payload[2:4])[0]
-                    info = self._entity_map.get(eid, {})
+        elif opcode == 1052 and len(payload) >= 13:
+            # XP/kill credit: [2B pad][2B eid BE][4B aux][4B float BE][1B stat_type]
+            eid = struct.unpack(">H", payload[2:4])[0]
+            fv = struct.unpack(">f", payload[8:12])[0]
+            stat_type = payload[12]
+            info = self._entity_map.get(eid)
+            if not info:
+                return
+            if stat_type == 0x29:
+                info["kills"] += 1
+                handle = info.get("handle", f"entity_{eid}")
+                print(f"\033[32m[MATCH KILL]\033[0m {handle} got a kill at {match_time:.1f}s", file=sys.stderr)
+                if _db:
+                    try:
+                        vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "kill", f"{handle} got a kill")
+                        vg_db.upsert_match_player(self.db_match_id, info["slot"], kills=info["kills"])
+                    except Exception:
+                        pass
+            elif stat_type in (0x15, 0x27, 0x00, 0x02, 0x04, 0x05) and fv > 0:
+                info["xp"] += fv
+                if _db:
+                    try:
+                        vg_db.upsert_match_player(self.db_match_id, info["slot"], xp=round(info["xp"], 0))
+                    except Exception:
+                        pass
+
+        elif opcode == 1053 and len(payload) >= 9:
+            # Entity stat: [2B pad][2B eid BE][4B float BE][1B stat_type]
+            eid = struct.unpack(">H", payload[2:4])[0]
+            info = self._entity_map.get(eid)
+            if not info:
+                return
+            fv = struct.unpack(">f", payload[4:8])[0]
+            stat_type = payload[8]
+            last = self._last_stat_time.get(eid, 0)
+            updated = {}
+            if stat_type == 0x00:
+                updated["energy_regen"] = round(fv, 1)
+            elif stat_type == 0x02:
+                updated["energy_delta"] = round(fv, 1)
+            elif stat_type == 0x06:
+                if fv < -500:
                     handle = info.get("handle", f"entity_{eid}")
-                    print(f"\033[31m[MATCH DEATH]\033[0m {handle} died at {match_time:.1f}s", file=sys.stderr)
-                    if vg_db is not None and self.db_match_id is not None:
+                    if _db:
                         try:
-                            vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "death", f"{handle} died")
-                            slot = info.get("slot", -1)
-                            if slot >= 0:
-                                vg_db.upsert_match_player(self.db_match_id, slot, deaths=1)
+                            vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "hit", f"{handle} took massive hit: {fv:.0f}")
                         except Exception:
                             pass
-                except struct.error:
+                updated["hp_delta"] = round(fv, 0)
+            elif stat_type == 0x08:
+                updated["ability_cd"] = round(fv, 1)
+            elif stat_type == 0x0F:
+                updated["in_combat"] = (fv == 1.0)
+            if updated and now - last >= 2.0 and _db:
+                self._last_stat_time[eid] = now
+                try:
+                    vg_db.upsert_match_player(self.db_match_id, info["slot"], **updated)
+                except Exception:
                     pass
 
-            elif opcode == 1052 and len(payload) >= 11:
-                # XP/kill credit: [2B pad][2B eid BE][4B aux][4B float BE][1B stat_type]
+        elif opcode == 1075 and len(payload) >= 8:
+            # Hero respawn: [2B pad][2B eid BE][4B timer float BE]
+            eid = struct.unpack(">H", payload[2:4])[0]
+            info = self._entity_map.get(eid)
+            if info and _db:
+                timer = struct.unpack(">f", payload[4:8])[0]
+                handle = info.get("handle", f"entity_{eid}")
                 try:
-                    eid = struct.unpack(">H", payload[2:4])[0]
-                    stat_type = payload[10]
-                    if stat_type == 0x29:
-                        info = self._entity_map.get(eid, {})
-                        handle = info.get("handle", f"entity_{eid}")
-                        print(f"\033[32m[MATCH KILL]\033[0m {handle} got a kill at {match_time:.1f}s", file=sys.stderr)
-                        if vg_db is not None and self.db_match_id is not None:
-                            try:
-                                vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "kill", f"{handle} got a kill")
-                                slot = info.get("slot", -1)
-                                if slot >= 0:
-                                    vg_db.upsert_match_player(self.db_match_id, slot, kills=1)
-                            except Exception:
-                                pass
-                except struct.error:
+                    vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "respawn", f"{handle} respawned ({timer:.1f}s)")
+                except Exception:
                     pass
 
-            elif opcode == 1076 and len(payload) >= 4:
-                # Level up: [2B pad][2B eid BE]
+        elif opcode == 1076 and len(payload) >= 4:
+            # Level up: [2B pad][2B eid BE]
+            eid = struct.unpack(">H", payload[2:4])[0]
+            info = self._entity_map.get(eid)
+            if not info:
+                return
+            if info["level"] < 12:
+                info["level"] += 1
+            handle = info.get("handle", f"entity_{eid}")
+            if _db:
                 try:
-                    eid = struct.unpack(">H", payload[2:4])[0]
-                    info = self._entity_map.get(eid, {})
+                    vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "level", f"{handle} reached level {info['level']}")
+                    vg_db.upsert_match_player(self.db_match_id, info["slot"], level=info["level"])
+                except Exception:
+                    pass
+
+        elif opcode == 1084 and len(payload) >= 8:
+            # CS: [2B pad][2B eid BE][2B pad][2B cs BE]
+            eid = struct.unpack(">H", payload[2:4])[0]
+            raw_cs = struct.unpack(">H", payload[6:8])[0]
+            cs = raw_cs - 2000 if raw_cs >= 2000 else raw_cs
+            info = self._entity_map.get(eid)
+            if info and _db:
+                try:
+                    vg_db.upsert_match_player(self.db_match_id, info["slot"], cs=cs)
+                except Exception:
+                    pass
+
+        elif opcode == 1087 and len(payload) >= 22:
+            # Entity data (items): sub_type 0x34 at payload[8] = item purchase
+            eid = struct.unpack(">H", payload[2:4])[0]
+            info = self._entity_map.get(eid)
+            if not info:
+                return
+            if payload[8] == 0x34:
+                cost = struct.unpack(">f", payload[18:22])[0]
+                if cost > 0:
+                    info["items_bought"] += 1
+                    info["gold_spent"] += cost
                     handle = info.get("handle", f"entity_{eid}")
-                    if vg_db is not None and self.db_match_id is not None:
+                    if _db:
                         try:
-                            vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "level", f"{handle} leveled up")
+                            vg_db.insert_match_event(self.db_match_id, round(match_time, 1), "item", f"{handle} bought item ({cost:.0f}g)")
+                            vg_db.upsert_match_player(self.db_match_id, info["slot"],
+                                                      items_bought=info["items_bought"],
+                                                      gold_spent=round(info["gold_spent"], 0))
                         except Exception:
                             pass
-                except struct.error:
+
+        elif opcode == 1093 and len(payload) >= 8:
+            # Gold: [2B pad][2B eid BE][2B pad][2B gold BE]
+            eid = struct.unpack(">H", payload[2:4])[0]
+            gold = struct.unpack(">H", payload[6:8])[0]
+            info = self._entity_map.get(eid)
+            if info and _db:
+                try:
+                    vg_db.upsert_match_player(self.db_match_id, info["slot"], gold=gold)
+                except Exception:
                     pass
 
-            elif opcode == 1084 and len(payload) >= 8:
-                # CS: [2B pad][2B eid BE][2B pad][2B cs BE]
+        elif opcode == 1108 and len(payload) >= 6:
+            # Game mode config: game mode string at offset 5
+            gm = payload[5:].split(b"\x00")[0].decode("ascii", errors="replace").strip("*")
+            if gm and _db:
                 try:
-                    eid = struct.unpack(">H", payload[2:4])[0]
-                    raw_cs = struct.unpack(">H", payload[6:8])[0]
-                    cs = raw_cs - 2000 if raw_cs >= 2000 else raw_cs
-                    info = self._entity_map.get(eid)
-                    if info and vg_db is not None and self.db_match_id is not None:
-                        try:
-                            vg_db.upsert_match_player(self.db_match_id, info["slot"], cs=cs)
-                        except Exception:
-                            pass
-                except struct.error:
+                    vg_db.update_match(self.match_id, game_mode=gm)
+                except Exception:
                     pass
 
-            elif opcode == 1093 and len(payload) >= 8:
-                # Gold: [2B pad][2B eid BE][2B pad][2B gold BE]
+        elif opcode == 1135 and len(payload) >= 1:
+            # Game mode name
+            gm = payload.split(b"\x00")[0].decode("ascii", errors="replace").strip("*")
+            if gm and _db:
                 try:
-                    eid = struct.unpack(">H", payload[2:4])[0]
-                    gold = struct.unpack(">H", payload[6:8])[0]
-                    info = self._entity_map.get(eid)
-                    if info and vg_db is not None and self.db_match_id is not None:
-                        try:
-                            vg_db.upsert_match_player(self.db_match_id, info["slot"], gold=gold)
-                        except Exception:
-                            pass
-                except struct.error:
+                    vg_db.update_match(self.match_id, game_mode=gm)
+                except Exception:
                     pass
 
     def _log_packet(self, direction: str, data: bytes, raw_log, hex_log):

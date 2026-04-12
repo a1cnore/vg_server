@@ -246,7 +246,9 @@ def update_match(match_id_text, **fields):
 # ---------------------------------------------------------------------------
 
 _MP_ALLOWED = {"handle", "team", "entity_id", "kills", "deaths", "cs",
-               "level", "gold", "xp", "pos_x", "pos_y", "items_bought"}
+               "level", "gold", "xp", "pos_x", "pos_y", "items_bought",
+               "in_combat", "energy_regen", "energy_delta", "hp_delta",
+               "ability_cd", "gold_spent"}
 
 
 def upsert_match_player(db_match_id, slot, **fields):

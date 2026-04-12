@@ -71,3 +71,11 @@ CREATE TABLE IF NOT EXISTS "rpc_logs" (
 CREATE UNIQUE INDEX IF NOT EXISTS "users_player_uuid_idx" ON "users" ("player_uuid");
 CREATE UNIQUE INDEX IF NOT EXISTS "matches_match_id_idx" ON "matches" ("match_id");
 CREATE UNIQUE INDEX IF NOT EXISTS "match_players_match_slot_idx" ON "match_players" ("match_id", "slot");
+
+-- Match player stat columns (added for POC parity)
+ALTER TABLE match_players ADD COLUMN IF NOT EXISTS in_combat boolean DEFAULT false NOT NULL;
+ALTER TABLE match_players ADD COLUMN IF NOT EXISTS energy_regen double precision DEFAULT 0 NOT NULL;
+ALTER TABLE match_players ADD COLUMN IF NOT EXISTS energy_delta double precision DEFAULT 0 NOT NULL;
+ALTER TABLE match_players ADD COLUMN IF NOT EXISTS hp_delta double precision DEFAULT 0 NOT NULL;
+ALTER TABLE match_players ADD COLUMN IF NOT EXISTS ability_cd double precision DEFAULT 0 NOT NULL;
+ALTER TABLE match_players ADD COLUMN IF NOT EXISTS gold_spent double precision DEFAULT 0 NOT NULL;

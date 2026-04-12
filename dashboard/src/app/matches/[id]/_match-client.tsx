@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { Scoreboard } from "@/components/scoreboard";
 import { PositionMap } from "@/components/position-map";
 import { EventTimeline } from "@/components/event-timeline";
+import { PlayerStats } from "@/components/player-stats";
 import StatusDot from "@/components/status-dot";
 import { formatDuration, truncateUuid } from "@/lib/utils";
 
@@ -21,6 +22,12 @@ interface Player {
   posX: number;
   posY: number;
   itemsBought: number;
+  inCombat: boolean;
+  energyRegen: number;
+  energyDelta: number;
+  hpDelta: number;
+  abilityCd: number;
+  goldSpent: number;
 }
 
 interface MatchEvent {
@@ -113,6 +120,9 @@ export default function MatchClient({
           <EventTimeline events={data.events} />
         </div>
       </div>
+
+      {/* Player Stats */}
+      <PlayerStats players={data.players} />
     </div>
   );
 }
