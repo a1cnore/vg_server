@@ -69,8 +69,8 @@ export default function HomeClient({ initial }: { initial: OverviewData }) {
         </div>
       </div>
 
-      {/* Globe */}
-      <div className="w-full h-[620px] rounded-lg border border-[#2a2a2a] bg-[#0a0a0a] overflow-hidden">
+      {/* Globe — full bleed */}
+      <div className="-mx-6 h-[620px] bg-[#0a0a0a] overflow-hidden">
         <Suspense
           fallback={
             <div className="flex items-center justify-center h-full text-[#666] text-sm">

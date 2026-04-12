@@ -65,9 +65,9 @@ export default function UserDetailClient({
   }, [tab, userId]);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col h-[calc(100vh-40px)]">
       {/* User header */}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2 px-6 pt-6 pb-3 shrink-0">
         <div className="flex items-center gap-3">
           <StatusDot status={user.isOnline ? "online" : "offline"} />
           <h1 className="text-xl font-semibold">{user.playerHandle}</h1>
@@ -85,7 +85,7 @@ export default function UserDetailClient({
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-[#2a2a2a]">
+      <div className="flex gap-1 border-b border-[#2a2a2a] px-6 shrink-0">
         <button
           onClick={() => setTab("matches")}
           className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
@@ -108,38 +108,40 @@ export default function UserDetailClient({
         </button>
       </div>
 
-      {/* Tab content */}
-      {tab === "matches" && (
-        <div className="flex flex-col gap-2">
-          {initialMatches.map((m) => (
-            <MatchCard
-              key={m.id}
-              id={m.id}
-              matchId={m.matchId}
-              gameMode={m.gameMode}
-              status={m.status}
-              startedAt={m.startedAt}
-              durationS={m.durationS}
-              userHandle={null}
-              blueKills={0}
-              redKills={0}
-            />
-          ))}
-          {initialMatches.length === 0 && (
-            <p className="text-[#666] text-sm">No matches yet.</p>
-          )}
-        </div>
-      )}
+      {/* Tab content — fills remaining height */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {tab === "matches" && (
+          <div className="flex flex-col gap-2 p-6 overflow-y-auto h-full">
+            {initialMatches.map((m) => (
+              <MatchCard
+                key={m.id}
+                id={m.id}
+                matchId={m.matchId}
+                gameMode={m.gameMode}
+                status={m.status}
+                startedAt={m.startedAt}
+                durationS={m.durationS}
+                userHandle={null}
+                blueKills={0}
+                redKills={0}
+              />
+            ))}
+            {initialMatches.length === 0 && (
+              <p className="text-[#666] text-sm">No matches yet.</p>
+            )}
+          </div>
+        )}
 
-      {tab === "rpc" && (
-        <div>
-          {!rpcLoaded ? (
-            <p className="text-[#666] text-sm">Loading...</p>
-          ) : (
-            <RpcStream logs={rpcLogs} />
-          )}
-        </div>
-      )}
+        {tab === "rpc" && (
+          <div className="h-full">
+            {!rpcLoaded ? (
+              <p className="text-[#666] text-sm p-6">Loading...</p>
+            ) : (
+              <RpcStream logs={rpcLogs} fullHeight />
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -16,6 +16,7 @@ interface RpcLog {
 
 interface RpcStreamProps {
   logs: RpcLog[];
+  fullHeight?: boolean;
 }
 
 const categoryColor: Record<string, string> = {
@@ -36,7 +37,7 @@ function formatTs(ts: string): string {
   }
 }
 
-export function RpcStream({ logs }: RpcStreamProps) {
+export function RpcStream({ logs, fullHeight }: RpcStreamProps) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -50,7 +51,10 @@ export function RpcStream({ logs }: RpcStreamProps) {
   return (
     <div
       ref={containerRef}
-      className="max-h-96 overflow-y-auto border border-border rounded-md bg-card"
+      className={cn(
+        "overflow-y-auto bg-card",
+        fullHeight ? "h-full" : "max-h-96 border border-border rounded-md"
+      )}
     >
       <table className="w-full text-left">
         <thead className="sticky top-0 bg-card z-10">
@@ -71,7 +75,7 @@ export function RpcStream({ logs }: RpcStreamProps) {
         </thead>
         <tbody>
           {logs.map((log) => (
-            <Fragment key={log.id} log={log} expandedId={expandedId} setExpandedId={setExpandedId} />
+            <RpcRow key={log.id} log={log} expandedId={expandedId} setExpandedId={setExpandedId} />
           ))}
         </tbody>
       </table>
@@ -84,7 +88,7 @@ export function RpcStream({ logs }: RpcStreamProps) {
   );
 }
 
-function Fragment({
+function RpcRow({
   log,
   expandedId,
   setExpandedId,
@@ -142,13 +146,13 @@ function Fragment({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <div className="text-[10px] uppercase text-text-dim mb-1">Request</div>
-                <pre className="font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all max-h-96 overflow-auto">
+                <pre className="font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all max-h-[50vh] overflow-auto">
                   {JSON.stringify(log.req, null, 2)}
                 </pre>
               </div>
               <div>
                 <div className="text-[10px] uppercase text-text-dim mb-1">Response</div>
-                <pre className="font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all max-h-96 overflow-auto">
+                <pre className="font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all max-h-[50vh] overflow-auto">
                   {JSON.stringify(log.res, null, 2)}
                 </pre>
               </div>

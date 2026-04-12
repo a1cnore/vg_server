@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 const links = [
   { href: "/", label: "Overview" },
   { href: "/matches", label: "Matches" },
+  { href: "/users", label: "Users" },
 ];
 
 export function Nav() {
@@ -42,9 +43,6 @@ export function Nav() {
             </Link>
           );
         })}
-        <span className="px-1 py-2.5 text-xs text-text-dim cursor-default">
-          Users
-        </span>
       </div>
 
       <div className="ml-auto flex items-center gap-4 text-xs text-text-dim">
