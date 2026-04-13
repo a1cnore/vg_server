@@ -1,11 +1,14 @@
 import { db } from "@/db";
 import { matches, users, matchPlayers } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
+import { requireAdminPage } from "@/lib/auth";
 import MatchesClient from "./_matches-client";
 
 export const dynamic = "force-dynamic";
 
 export default async function Page() {
+  await requireAdminPage("/matches");
+
   const rows = await db
     .select({
       id: matches.id,

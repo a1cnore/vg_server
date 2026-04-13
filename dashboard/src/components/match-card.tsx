@@ -1,6 +1,6 @@
 import Link from "next/link";
 import StatusDot from "@/components/status-dot";
-import { formatDuration, timeAgo } from "@/lib/utils";
+import { cn, formatDuration, timeAgo } from "@/lib/utils";
 
 interface MatchCardProps {
   id: number;
@@ -12,14 +12,12 @@ interface MatchCardProps {
   durationS: number | null;
   blueKills: number;
   redKills: number;
+  href?: string | null;
 }
 
 export function MatchCard(m: MatchCardProps) {
-  return (
-    <Link
-      href={`/matches/${m.id}`}
-      className="flex items-center gap-3 border border-border rounded-md bg-card px-3 py-2 transition-colors hover:bg-panel"
-    >
+  const content = (
+    <>
       <StatusDot status={m.status === "live" ? "live" : "completed"} />
 
       <span className="font-mono text-text-secondary text-xs shrink-0">
@@ -51,6 +49,22 @@ export function MatchCard(m: MatchCardProps) {
           {timeAgo(m.startedAt)}
         </span>
       </div>
+    </>
+  );
+
+  const href = m.href === undefined ? `/matches/${m.id}` : m.href;
+  const className = cn(
+    "flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2",
+    href && "transition-colors hover:bg-panel"
+  );
+
+  if (!href) {
+    return <div className={className}>{content}</div>;
+  }
+
+  return (
+    <Link href={href} className={className}>
+      {content}
     </Link>
   );
 }

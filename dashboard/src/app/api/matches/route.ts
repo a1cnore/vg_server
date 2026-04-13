@@ -1,10 +1,15 @@
 import { db } from "@/db";
 import { matches, users, matchPlayers } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
+import { isAdminAuthenticated } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  if (!(await isAdminAuthenticated())) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const rows = await db
     .select({
       id: matches.id,

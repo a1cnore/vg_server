@@ -1,16 +1,18 @@
 import Link from "next/link";
 import StatusDot from "@/components/status-dot";
-import { truncateUuid, timeAgo } from "@/lib/utils";
+import { cn, truncateUuid, timeAgo } from "@/lib/utils";
 
 interface UserCardProps {
   id: number;
   playerHandle: string;
   playerUuid: string;
-  clientIp: string;
+  clientIp?: string | null;
   country: string | null;
   isOnline: boolean;
   connectedAt: string | null;
   lastSeenAt: string | null;
+  href?: string | null;
+  showIp?: boolean;
 }
 
 function countryFlag(code: string | null): string {
@@ -24,11 +26,8 @@ function countryFlag(code: string | null): string {
 }
 
 export function UserCard(u: UserCardProps) {
-  return (
-    <Link
-      href={`/users/${u.id}`}
-      className="flex flex-col gap-1.5 border border-border rounded-md bg-card px-3 py-2 transition-colors hover:bg-panel"
-    >
+  const content = (
+    <>
       <div className="flex items-center gap-2">
         <StatusDot status={u.isOnline ? "online" : "offline"} />
         <span className="text-sm font-medium text-text-primary truncate">
@@ -43,7 +42,9 @@ export function UserCard(u: UserCardProps) {
             {countryFlag(u.country)} {u.country}
           </span>
         )}
-        <span className="font-mono">{u.clientIp}</span>
+        {u.showIp !== false && u.clientIp && (
+          <span className="font-mono">{u.clientIp}</span>
+        )}
       </div>
 
       <div className="text-[11px] text-text-dim">
@@ -51,6 +52,22 @@ export function UserCard(u: UserCardProps) {
           ? `connected ${timeAgo(u.connectedAt)}`
           : `last seen ${timeAgo(u.lastSeenAt)}`}
       </div>
+    </>
+  );
+
+  const href = u.href === undefined ? `/users/${u.id}` : u.href;
+  const className = cn(
+    "flex flex-col gap-1.5 rounded-md border border-border bg-card px-3 py-2",
+    href && "transition-colors hover:bg-panel"
+  );
+
+  if (!href) {
+    return <div className={className}>{content}</div>;
+  }
+
+  return (
+    <Link href={href} className={className}>
+      {content}
     </Link>
   );
 }

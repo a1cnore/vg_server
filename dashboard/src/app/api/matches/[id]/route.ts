@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { matches, users, matchPlayers, matchEvents } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { isAdminAuthenticated } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,10 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!(await isAdminAuthenticated())) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const { id } = await params;
   const numId = Number(id);
 

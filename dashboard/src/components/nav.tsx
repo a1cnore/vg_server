@@ -2,20 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { logoutAction } from "@/app/admin/actions";
 import { cn } from "@/lib/utils";
 
-const links = [
-  { href: "/", label: "Overview" },
-  { href: "/matches", label: "Matches" },
-  { href: "/users", label: "Users" },
-];
-
-export function Nav() {
+export function Nav({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
+  const links = isAdmin
+    ? [
+        { href: "/", label: "Overview" },
+        { href: "/matches", label: "Matches" },
+        { href: "/users", label: "Users" },
+      ]
+    : [{ href: "/", label: "Overview" }];
 
   return (
     <nav className="fixed top-0 z-50 flex h-10 w-full items-center border-b border-border bg-page/95 px-4 backdrop-blur-sm">
-      <div className="flex items-center gap-1.5 mr-8">
+      <div className="mr-8 flex items-center gap-1.5">
         <span className="text-sm font-bold text-accent-cyan">VG</span>
         <span className="text-xs text-text-dim tracking-wider">DASHBOARD</span>
       </div>
@@ -46,14 +48,21 @@ export function Nav() {
       </div>
 
       <div className="ml-auto flex items-center gap-4 text-xs text-text-dim">
-        <span>
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent-green mr-1.5" />
-          <span className="font-mono">--</span> users
-        </span>
-        <span>
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent-cyan mr-1.5" />
-          <span className="font-mono">--</span> live
-        </span>
+        {isAdmin ? (
+          <>
+            <span className="text-text-secondary">Admin</span>
+            <form action={logoutAction}>
+              <button
+                type="submit"
+                className="text-text-dim transition-colors hover:text-text-primary"
+              >
+                Log Out
+              </button>
+            </form>
+          </>
+        ) : (
+          <span className="text-text-secondary">Guest Mode</span>
+        )}
       </div>
     </nav>
   );

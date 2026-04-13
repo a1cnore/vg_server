@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Nav } from "@/components/nav";
+import { isAdminAuthenticated } from "@/lib/auth";
 import "./globals.css";
 
 const inter = Inter({
@@ -20,18 +21,20 @@ export const metadata: Metadata = {
   description: "Vainglory match monitoring",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const isAdmin = await isAdminAuthenticated();
+
   return (
     <html
       lang="en"
       className={`dark ${inter.variable} ${jetbrainsMono.variable}`}
     >
       <body className="min-h-screen bg-page font-sans antialiased">
-        <Nav />
+        <Nav isAdmin={isAdmin} />
         <main className="pt-10">{children}</main>
       </body>
     </html>

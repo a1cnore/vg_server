@@ -1,29 +1,12 @@
 "use client";
 import { useState, useEffect, lazy, Suspense } from "react";
+import { MatchCard } from "@/components/match-card";
 import { UserCard } from "@/components/user-card";
+import type { OverviewData } from "@/lib/overview";
 
 const Globe = lazy(() =>
   import("@/components/globe").then((m) => ({ default: m.Globe }))
 );
-
-interface User {
-  id: number;
-  playerHandle: string;
-  playerUuid: string;
-  clientIp: string;
-  country: string | null;
-  lat: number | null;
-  lng: number | null;
-  isOnline: boolean;
-  connectedAt: string | null;
-  lastSeenAt: string | null;
-}
-
-interface OverviewData {
-  users: User[];
-  liveMatches: number;
-  totalMatches: number;
-}
 
 export default function HomeClient({ initial }: { initial: OverviewData }) {
   const [data, setData] = useState(initial);
@@ -47,29 +30,6 @@ export default function HomeClient({ initial }: { initial: OverviewData }) {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Stats bar */}
-      <div className="flex gap-6 text-sm">
-        <div>
-          <span className="font-mono text-lg text-[#e5e5e5]">
-            {data.users.length}
-          </span>{" "}
-          <span className="text-[#666]">users online</span>
-        </div>
-        <div>
-          <span className="font-mono text-lg text-[#e5e5e5]">
-            {data.liveMatches}
-          </span>{" "}
-          <span className="text-[#666]">live matches</span>
-        </div>
-        <div>
-          <span className="font-mono text-lg text-[#e5e5e5]">
-            {data.totalMatches}
-          </span>{" "}
-          <span className="text-[#666]">total matches</span>
-        </div>
-      </div>
-
-      {/* Globe — full bleed */}
       <div className="-mx-6 h-[620px] bg-[#0a0a0a] overflow-hidden">
         <Suspense
           fallback={
@@ -82,12 +42,44 @@ export default function HomeClient({ initial }: { initial: OverviewData }) {
         </Suspense>
       </div>
 
-      {/* Connected users grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {data.users.map((u) => (
-          <UserCard key={u.id} {...u} />
-        ))}
-      </div>
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[#e5e5e5]">
+            Recent Matches
+          </h2>
+          <span className="text-xs text-[#666]">
+            {data.recentMatches.length} tracked
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          {data.recentMatches.map((match) => (
+            <MatchCard key={match.id} {...match} href={null} />
+          ))}
+          {data.recentMatches.length === 0 && (
+            <p className="text-sm text-[#666]">No recent matches yet.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[#e5e5e5]">
+            Connected Players
+          </h2>
+          <span className="text-xs text-[#666]">{data.users.length} online</span>
+        </div>
+
+        {data.users.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {data.users.map((u) => (
+              <UserCard key={u.id} {...u} href={null} showIp={false} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-[#666]">No connected players.</p>
+        )}
+      </section>
     </div>
   );
 }

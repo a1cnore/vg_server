@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { users, matches } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { requireAdminPage } from "@/lib/auth";
 import { notFound } from "next/navigation";
 import UserDetailClient from "./_user-client";
 
@@ -13,6 +14,8 @@ export default async function Page({
 }) {
   const { id } = await params;
   const numId = Number(id);
+
+  await requireAdminPage(`/users/${id}`);
 
   const [userRows, userMatches] = await Promise.all([
     db.select().from(users).where(eq(users.id, numId)).limit(1),

@@ -45,6 +45,14 @@ jobs:
               export VG_GAME_PROXY_PORT="${{ secrets.VG_GAME_PROXY_PORT }}"
             fi
 
+            if [ -n "${{ secrets.ADMIN_PASSWORD }}" ]; then
+              export ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}"
+            fi
+
+            if [ -n "${{ secrets.ADMIN_SESSION_SECRET }}" ]; then
+              export ADMIN_SESSION_SECRET="${{ secrets.ADMIN_SESSION_SECRET }}"
+            fi
+
             echo "=== Ensuring DB schema exists ==="
             # If the users table doesn't exist, reset the postgres volume so init.sql runs
             if docker compose -f server/docker-compose.yml exec -T postgres psql -U vg -d vg -c '\dt users' 2>/dev/null | grep -q users; then

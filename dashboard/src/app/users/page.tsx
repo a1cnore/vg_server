@@ -2,10 +2,13 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { desc } from "drizzle-orm";
 import { UserCard } from "@/components/user-card";
+import { requireAdminPage } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function Page() {
+  await requireAdminPage("/users");
+
   const allUsers = await db
     .select()
     .from(users)

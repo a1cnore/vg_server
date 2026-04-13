@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { matches, users, matchPlayers, matchEvents } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { requireAdminPage } from "@/lib/auth";
 import { notFound } from "next/navigation";
 import MatchClient from "./_match-client";
 
@@ -13,6 +14,8 @@ export default async function Page({
 }) {
   const { id } = await params;
   const numId = Number(id);
+
+  await requireAdminPage(`/matches/${id}`);
 
   const [matchRows, players, events] = await Promise.all([
     db
