@@ -2,6 +2,7 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { MatchCard } from "@/components/match-card";
 import { UserCard } from "@/components/user-card";
+import { DownloadWidget } from "@/components/download-widget";
 import type { OverviewData } from "@/lib/overview";
 
 const Globe = lazy(() =>
@@ -30,7 +31,7 @@ export default function HomeClient({ initial }: { initial: OverviewData }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="-mx-6 h-[620px] bg-[#0a0a0a] overflow-hidden">
+      <div className="-mx-6 h-[620px] bg-[#0a0a0a] overflow-hidden relative">
         <Suspense
           fallback={
             <div className="flex items-center justify-center h-full text-[#666] text-sm">
@@ -40,6 +41,9 @@ export default function HomeClient({ initial }: { initial: OverviewData }) {
         >
           <Globe users={globeUsers} />
         </Suspense>
+        <div className="absolute top-4 right-4 z-10">
+          <DownloadWidget />
+        </div>
       </div>
 
       <section className="flex flex-col gap-3">
