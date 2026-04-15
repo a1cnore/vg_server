@@ -23,7 +23,7 @@ interface GlobePoint {
 const EU_SERVER: GlobePoint = {
   lat: 49.4521,
   lng: 11.0767,
-  label: "EU Server — Nuremberg",
+  label: "eu-central-nuremberg",
   kind: "server",
 };
 
@@ -33,7 +33,7 @@ export function Globe({ users }: { users: GlobeUser[] }) {
   useEffect(() => {
     const globe = globeRef.current;
     if (!globe) return;
-    globe.pointOfView({ altitude: 1.6 }, 0);
+    globe.pointOfView({ lat: 50, lng: 10, altitude: 1.1 }, 0);
     const controls = globe.controls();
     controls.autoRotate = true;
     controls.autoRotateSpeed = 0.5;
@@ -69,10 +69,10 @@ export function Globe({ users }: { users: GlobeUser[] }) {
           (d as GlobePoint).kind === "server" ? "#f97316" : "#22d3ee"
         }
         pointAltitude={(d: object) =>
-          (d as GlobePoint).kind === "server" ? 0.05 : 0.01
+          (d as GlobePoint).kind === "server" ? 0.02 : 0.01
         }
         pointRadius={(d: object) =>
-          (d as GlobePoint).kind === "server" ? 0.8 : 0.5
+          (d as GlobePoint).kind === "server" ? 0.45 : 0.5
         }
         pointLabel={(d: object) => (d as GlobePoint).label}
         labelsData={[EU_SERVER]}
