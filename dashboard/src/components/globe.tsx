@@ -33,7 +33,10 @@ export function Globe({ users }: { users: GlobeUser[] }) {
   useEffect(() => {
     const globe = globeRef.current;
     if (!globe) return;
-    globe.pointOfView({ lat: 50, lng: 10, altitude: 1.1 }, 0);
+    globe.pointOfView(
+      { lat: EU_SERVER.lat, lng: EU_SERVER.lng, altitude: 0.3 },
+      0
+    );
     const controls = globe.controls();
     controls.autoRotate = true;
     controls.autoRotateSpeed = 0.5;
