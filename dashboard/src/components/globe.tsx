@@ -13,23 +13,46 @@ interface GlobeUser {
   country: string | null;
 }
 
+interface GlobePoint {
+  lat: number;
+  lng: number;
+  label: string;
+  kind: "user" | "server";
+}
+
+const EU_SERVER: GlobePoint = {
+  lat: 49.4521,
+  lng: 11.0767,
+  label: "EU Server — Nuremberg",
+  kind: "server",
+};
+
 export function Globe({ users }: { users: GlobeUser[] }) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
 
   useEffect(() => {
     const globe = globeRef.current;
     if (!globe) return;
+    globe.pointOfView({ altitude: 1.6 }, 0);
     const controls = globe.controls();
     controls.autoRotate = true;
     controls.autoRotateSpeed = 0.5;
     controls.enableZoom = false;
   }, []);
 
-  // Filter out users without coordinates
-  const points = users.filter(
-    (u): u is GlobeUser & { lat: number; lng: number } =>
-      u.lat !== null && u.lng !== null
-  );
+  const userPoints: GlobePoint[] = users
+    .filter(
+      (u): u is GlobeUser & { lat: number; lng: number } =>
+        u.lat !== null && u.lng !== null
+    )
+    .map((u) => ({
+      lat: u.lat,
+      lng: u.lng,
+      label: `${u.playerHandle}${u.country ? ` (${u.country})` : ""}`,
+      kind: "user",
+    }));
+
+  const points: GlobePoint[] = [...userPoints, EU_SERVER];
 
   return (
     <div className="w-full h-full bg-page">
@@ -42,13 +65,25 @@ export function Globe({ users }: { users: GlobeUser[] }) {
         pointsData={points}
         pointLat="lat"
         pointLng="lng"
-        pointColor={() => "#22d3ee"}
-        pointAltitude={0.01}
-        pointRadius={0.5}
-        pointLabel={(d: object) => {
-          const u = d as GlobeUser;
-          return `${u.playerHandle}${u.country ? ` (${u.country})` : ""}`;
-        }}
+        pointColor={(d: object) =>
+          (d as GlobePoint).kind === "server" ? "#f97316" : "#22d3ee"
+        }
+        pointAltitude={(d: object) =>
+          (d as GlobePoint).kind === "server" ? 0.05 : 0.01
+        }
+        pointRadius={(d: object) =>
+          (d as GlobePoint).kind === "server" ? 0.8 : 0.5
+        }
+        pointLabel={(d: object) => (d as GlobePoint).label}
+        labelsData={[EU_SERVER]}
+        labelLat="lat"
+        labelLng="lng"
+        labelText="label"
+        labelSize={1.2}
+        labelDotRadius={0.4}
+        labelColor={() => "#f97316"}
+        labelResolution={2}
+        labelAltitude={0.01}
         height={600}
       />
     </div>

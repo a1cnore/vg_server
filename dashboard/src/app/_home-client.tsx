@@ -41,8 +41,39 @@ export default function HomeClient({ initial }: { initial: OverviewData }) {
         >
           <Globe users={globeUsers} />
         </Suspense>
+        <div
+          className="absolute top-4 left-4 z-10 flex flex-col gap-2"
+          style={{ fontFamily: "Menlo, monospace" }}
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="text-5xl font-bold leading-none text-[#e5e5e5] tabular-nums">
+              {data.totalPlayers}
+            </span>
+            <span className="text-[10px] uppercase tracking-wider text-[#666]">
+              Players
+            </span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-5xl font-bold leading-none text-[#e5e5e5] tabular-nums">
+              {data.totalMatches}
+            </span>
+            <span className="text-[10px] uppercase tracking-wider text-[#666]">
+              Matches
+            </span>
+          </div>
+        </div>
         <div className="absolute top-4 right-4 z-10">
           <DownloadWidget />
+        </div>
+        <div className="absolute bottom-4 left-4 z-10 flex flex-col gap-1 rounded-lg border border-[#222] bg-[#0a0a0a]/80 backdrop-blur-sm px-3 py-2 shadow-lg">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full bg-[#f97316]" />
+            <span className="text-xs text-[#e5e5e5]">EU Server</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full bg-[#22d3ee]" />
+            <span className="text-xs text-[#e5e5e5]">Connected Player</span>
+          </div>
         </div>
       </div>
 

@@ -22,7 +22,7 @@ export function DownloadWidget() {
           Download
         </span>
         <span className="text-sm font-semibold text-[#e5e5e5]">
-          Vainglory CE Unlocked EU
+          Vainglory CE Unlocked EU (iOS)
         </span>
       </div>
     </a>

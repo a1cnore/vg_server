@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { count, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { matchPlayers, matches, users } from "@/db/schema";
 
@@ -29,10 +29,12 @@ export interface RecentMatchSummary {
 export interface OverviewData {
   users: ConnectedUserSummary[];
   recentMatches: RecentMatchSummary[];
+  totalPlayers: number;
+  totalMatches: number;
 }
 
 export async function getOverviewData(): Promise<OverviewData> {
-  const [onlineUsers, recentMatches] = await Promise.all([
+  const [onlineUsers, recentMatches, totalPlayersRow, totalMatchesRow] = await Promise.all([
     db
       .select({
         id: users.id,
@@ -75,6 +77,8 @@ export async function getOverviewData(): Promise<OverviewData> {
         desc(matches.startedAt)
       )
       .limit(10),
+    db.select({ value: count() }).from(users),
+    db.select({ value: count() }).from(matches),
   ]);
 
   return {
@@ -87,5 +91,7 @@ export async function getOverviewData(): Promise<OverviewData> {
       ...match,
       startedAt: match.startedAt?.toISOString() ?? null,
     })),
+    totalPlayers: Number(totalPlayersRow[0]?.value ?? 0),
+    totalMatches: Number(totalMatchesRow[0]?.value ?? 0),
   };
 }
