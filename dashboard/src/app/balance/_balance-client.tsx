@@ -34,10 +34,16 @@ interface HeroLevel12 {
   atk_speed_pct: number;
 }
 
+interface AbilityFloat {
+  offset: number;
+  value: number;
+}
+
 interface Hero {
   name: string;
   stats: HeroStats;
   level_12: HeroLevel12;
+  ability_region_floats?: AbilityFloat[];
 }
 
 interface Item {
@@ -48,9 +54,23 @@ interface Item {
   total_cost_estimate: number;
 }
 
+interface Talent {
+  name: string;
+  data_size: number;
+  floats: Record<string, number> | null;
+}
+
+interface GameMode {
+  name: string;
+  data_size: number;
+  floats: Record<string, number> | null;
+}
+
 interface BalanceDB {
   heroes: Record<string, Hero>;
   items: Record<string, Item>;
+  talents: Record<string, Talent>;
+  game_modes: Record<string, GameMode>;
 }
 
 const HERO_BLACKLIST = new Set([
@@ -74,6 +94,28 @@ const ITEM_BLACKLIST = new Set([
 
 function stripItemPrefix(name: string): string {
   return name.replace(/^Item_/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function stripTalentPrefix(name: string): string {
+  return name.replace(/^Talent_/, "").replace(/_/g, " / ");
+}
+
+function stripGameModePrefix(name: string): string {
+  return name.replace(/^GameMode_/, "").replace(/_/g, " ");
+}
+
+function FloatGrid({ floats }: { floats: Record<string, number> }) {
+  const entries = Object.entries(floats);
+  return (
+    <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-x-3 gap-y-0.5">
+      {entries.map(([offset, value]) => (
+        <div key={offset} className="flex items-baseline gap-1 text-[11px]">
+          <span className="text-text-dim font-mono">{offset}:</span>
+          <span className="text-text-primary font-mono">{value}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 type SortDir = "asc" | "desc";
@@ -128,45 +170,63 @@ function HeroDetail({ hero }: { hero: Hero }) {
   ];
 
   const l = hero.level_12;
+  const abilityFloats = hero.ability_region_floats ?? [];
 
   return (
-    <div className="grid grid-cols-2 gap-4 px-4 py-3">
-      <div>
-        <div className="text-[11px] text-text-dim uppercase tracking-wider mb-1.5">
-          Base Stats &amp; Growth
+    <div className="flex flex-col gap-3 px-4 py-3">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <div className="text-[11px] text-text-dim uppercase tracking-wider mb-1.5">
+            Base Stats &amp; Growth
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {rows.map(([label, base, growth]) => (
+              <div key={label} className="flex items-baseline gap-2 text-xs">
+                <span className="text-text-secondary w-28 shrink-0">{label}</span>
+                <span className="font-mono text-text-primary">{base}</span>
+                {growth && (
+                  <span className="font-mono text-text-dim text-[11px]">{growth}</span>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex flex-col gap-0.5">
-          {rows.map(([label, base, growth]) => (
-            <div key={label} className="flex items-baseline gap-2 text-xs">
-              <span className="text-text-secondary w-28 shrink-0">{label}</span>
-              <span className="font-mono text-text-primary">{base}</span>
-              {growth && (
-                <span className="font-mono text-text-dim text-[11px]">{growth}</span>
-              )}
-            </div>
-          ))}
+        <div>
+          <div className="text-[11px] text-text-dim uppercase tracking-wider mb-1.5">
+            Level 12 Values
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {([
+              ["Health", l.health],
+              ["Energy", l.energy],
+              ["Weapon", l.weapon],
+              ["Armor", l.armor],
+              ["Shield", l.shield],
+              ["Atk Speed", `${l.atk_speed_pct}%`],
+            ] as [string, number | string][]).map(([label, val]) => (
+              <div key={label} className="flex items-baseline gap-2 text-xs">
+                <span className="text-text-secondary w-28 shrink-0">{label}</span>
+                <span className="font-mono text-accent-cyan">{val}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
-      <div>
-        <div className="text-[11px] text-text-dim uppercase tracking-wider mb-1.5">
-          Level 12 Values
+      {abilityFloats.length > 0 && (
+        <div>
+          <div className="text-[11px] text-text-dim uppercase tracking-wider mb-1.5">
+            Ability Data (raw offsets)
+          </div>
+          <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-x-3 gap-y-0.5">
+            {abilityFloats.map((af) => (
+              <div key={af.offset} className="flex items-baseline gap-1 text-[11px]">
+                <span className="text-text-dim font-mono">{af.offset}:</span>
+                <span className="text-text-primary font-mono">{af.value}</span>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex flex-col gap-0.5">
-          {([
-            ["Health", l.health],
-            ["Energy", l.energy],
-            ["Weapon", l.weapon],
-            ["Armor", l.armor],
-            ["Shield", l.shield],
-            ["Atk Speed", `${l.atk_speed_pct}%`],
-          ] as [string, number | string][]).map(([label, val]) => (
-            <div key={label} className="flex items-baseline gap-2 text-xs">
-              <span className="text-text-secondary w-28 shrink-0">{label}</span>
-              <span className="font-mono text-accent-cyan">{val}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -228,7 +288,7 @@ function sortList<T>(list: T[], getValue: (item: T) => number | string, dir: Sor
 
 export default function BalanceClient() {
   const [data, setData] = useState<BalanceDB | null>(null);
-  const [tab, setTab] = useState<"heroes" | "items">("heroes");
+  const [tab, setTab] = useState<"heroes" | "items" | "talents" | "game_modes">("heroes");
 
   const [heroSort, setHeroSort] = useState<HeroSortField>("name");
   const [heroDir, setHeroDir] = useState<SortDir>("asc");
@@ -254,6 +314,9 @@ export default function BalanceClient() {
   const items = Object.values(data.items).filter(
     (i) => !ITEM_BLACKLIST.has(i.name),
   );
+
+  const talents = Object.values(data.talents);
+  const gameModes = Object.values(data.game_modes);
 
   const sortedHeroes = sortList(heroes, (h) => getHeroSortValue(h, heroSort), heroDir);
   const sortedItems = sortList(items, (i) => getItemSortValue(i, itemSort), itemDir);
@@ -309,7 +372,12 @@ export default function BalanceClient() {
       </div>
 
       <div className="flex items-center gap-1">
-        {(["heroes", "items"] as const).map((t) => (
+        {([
+          ["heroes", `Heroes (${heroes.length})`],
+          ["items", `Items (${items.length})`],
+          ["talents", `Talents (${talents.length})`],
+          ["game_modes", `Game Modes (${gameModes.length})`],
+        ] as const).map(([t, label]) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -320,7 +388,7 @@ export default function BalanceClient() {
                 : "text-text-dim hover:text-text-secondary",
             )}
           >
-            {t === "heroes" ? `Heroes (${heroes.length})` : `Items (${items.length})`}
+            {label}
           </button>
         ))}
       </div>
@@ -440,6 +508,50 @@ export default function BalanceClient() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {tab === "talents" && (
+        <div className="border border-border rounded-md bg-card divide-y divide-border">
+          {talents.map((talent) => (
+            <div key={talent.name} className="px-4 py-2.5">
+              <div className="flex items-baseline gap-3 mb-1">
+                <span className="text-xs text-text-primary font-medium">
+                  {stripTalentPrefix(talent.name)}
+                </span>
+                <span className="text-[11px] text-text-dim font-mono">
+                  {talent.data_size} bytes
+                </span>
+              </div>
+              {talent.floats && Object.keys(talent.floats).length > 0 ? (
+                <FloatGrid floats={talent.floats} />
+              ) : (
+                <span className="text-[11px] text-text-dim">No float data</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "game_modes" && (
+        <div className="border border-border rounded-md bg-card divide-y divide-border">
+          {gameModes.map((gm) => (
+            <div key={gm.name} className="px-4 py-2.5">
+              <div className="flex items-baseline gap-3 mb-1">
+                <span className="text-xs text-text-primary font-medium">
+                  {stripGameModePrefix(gm.name)}
+                </span>
+                <span className="text-[11px] text-text-dim font-mono">
+                  {gm.data_size} bytes
+                </span>
+              </div>
+              {gm.floats && Object.keys(gm.floats).length > 0 ? (
+                <FloatGrid floats={gm.floats} />
+              ) : (
+                <span className="text-[11px] text-text-dim">No float data</span>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
