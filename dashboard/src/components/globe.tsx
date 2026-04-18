@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import type { GlobeMethods } from "react-globe.gl";
 
@@ -30,7 +30,7 @@ const EU_SERVER: GlobePoint = {
 export function Globe({ users }: { users: GlobeUser[] }) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
 
-  useEffect(() => {
+  const handleGlobeReady = useCallback(() => {
     const globe = globeRef.current;
     if (!globe) return;
     globe.pointOfView(
@@ -61,6 +61,7 @@ export function Globe({ users }: { users: GlobeUser[] }) {
     <div className="w-full h-full bg-page">
       <GlobeGL
         ref={globeRef}
+        onGlobeReady={handleGlobeReady}
         globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
         backgroundColor="#0a0a0a"
         atmosphereColor="#22d3ee"

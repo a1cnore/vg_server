@@ -12,8 +12,12 @@ export function Nav({ isAdmin }: { isAdmin: boolean }) {
         { href: "/", label: "Overview" },
         { href: "/matches", label: "Matches" },
         { href: "/users", label: "Users" },
+        { href: "/balance", label: "Balance" },
       ]
-    : [{ href: "/", label: "Overview" }];
+    : [
+        { href: "/", label: "Overview" },
+        { href: "/balance", label: "Balance" },
+      ];
 
   return (
     <nav className="fixed top-0 z-50 flex h-10 w-full items-center border-b border-border bg-page/95 px-4 backdrop-blur-sm">
