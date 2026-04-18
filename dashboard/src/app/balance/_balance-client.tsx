@@ -34,6 +34,17 @@ interface HeroLevel12 {
   atk_speed_pct: number;
 }
 
+interface AbilityVariable {
+  type: string;
+  levels: number[];
+}
+
+interface Ability {
+  slot: string;
+  offset: number;
+  variables: AbilityVariable[];
+}
+
 interface AbilityFloat {
   offset: number;
   value: number;
@@ -43,6 +54,7 @@ interface Hero {
   name: string;
   stats: HeroStats;
   level_12: HeroLevel12;
+  abilities?: Ability[];
   ability_region_floats?: AbilityFloat[];
 }
 
@@ -170,7 +182,6 @@ function HeroDetail({ hero }: { hero: Hero }) {
   ];
 
   const l = hero.level_12;
-  const abilityFloats = hero.ability_region_floats ?? [];
 
   return (
     <div className="flex flex-col gap-3 px-4 py-3">
@@ -212,16 +223,50 @@ function HeroDetail({ hero }: { hero: Hero }) {
           </div>
         </div>
       </div>
-      {abilityFloats.length > 0 && (
+      {hero.abilities && hero.abilities.length > 0 && (
         <div>
           <div className="text-[11px] text-text-dim uppercase tracking-wider mb-1.5">
-            Ability Data (raw offsets)
+            Abilities
           </div>
-          <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-x-3 gap-y-0.5">
-            {abilityFloats.map((af) => (
-              <div key={af.offset} className="flex items-baseline gap-1 text-[11px]">
-                <span className="text-text-dim font-mono">{af.offset}:</span>
-                <span className="text-text-primary font-mono">{af.value}</span>
+          <div className="flex flex-col gap-2">
+            {hero.abilities.map((ab) => (
+              <div key={ab.offset} className="border border-border rounded px-3 py-2 bg-panel/20">
+                <div className="text-xs font-medium text-accent-cyan mb-1">
+                  {ab.slot.toUpperCase()}
+                </div>
+                <table className="w-full">
+                  <thead>
+                    <tr className="text-[10px] text-text-dim uppercase">
+                      <th className="text-left pr-2 font-medium">Stat</th>
+                      <th className="text-right px-1 font-medium w-14">L1</th>
+                      <th className="text-right px-1 font-medium w-14">L2</th>
+                      <th className="text-right px-1 font-medium w-14">L3</th>
+                      <th className="text-right px-1 font-medium w-14">L4</th>
+                      <th className="text-right px-1 font-medium w-14">L5</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ab.variables.map((v, vi) => {
+                      const isOd = v.levels[4] !== v.levels[3];
+                      return (
+                        <tr key={vi} className="text-[11px]">
+                          <td className="text-text-secondary pr-2 py-0.5">{v.type.replace(/_/g, " ")}</td>
+                          {v.levels.map((lv, li) => (
+                            <td
+                              key={li}
+                              className={cn(
+                                "text-right px-1 py-0.5 font-mono",
+                                li === 4 && isOd ? "text-accent-gold font-semibold" : "text-text-primary",
+                              )}
+                            >
+                              {Number.isInteger(lv) ? lv : lv.toFixed(lv < 1 ? 2 : 1)}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             ))}
           </div>
