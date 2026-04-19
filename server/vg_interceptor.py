@@ -11,26 +11,28 @@ from __future__ import annotations
 
 import json
 import os
+import queue as _queue
+import socket
 import sys
 import threading
-import queue as _queue
 from datetime import datetime, timezone
 from pathlib import Path
 
-import socket
-
-from mitmproxy import http, tls, connection, ctx
-
-from vg_game_proxy import start_match_proxy, stop_match_proxy, _force_key_mode
+from mitmproxy import connection, ctx, http, tls
+from vg_game_proxy import _force_key_mode, start_match_proxy, stop_match_proxy
 
 try:
     import vg_db
 except ImportError:
     vg_db = None
-    print("[vg_interceptor] WARNING: vg_db not available, DB logging disabled", file=sys.stderr)
+    print(
+        "[vg_interceptor] WARNING: vg_db not available, DB logging disabled",
+        file=sys.stderr,
+    )
 
 # Set VG_FORCE_KEY=1 to enable force-key mode on the game proxy
 import vg_game_proxy
+
 if os.environ.get("VG_FORCE_KEY") == "1":
     vg_game_proxy._force_key_mode = True
     print("[vg_interceptor] FORCE-KEY mode enabled via VG_FORCE_KEY=1", file=sys.stderr)
@@ -103,6 +105,7 @@ def _db_enqueue(fn, *args, **kwargs):
     if vg_db is not None:
         _db_queue.put((fn, args, kwargs))
 
+
 LOG_BASE = Path(os.environ.get("VG_LOG_DIR", Path(__file__).parent))
 LOG_DIR = LOG_BASE
 LOG_FILE = LOG_DIR / "vg_traffic.jsonl"
@@ -113,53 +116,120 @@ C_RESET = "\033[0m"
 C_DIM = "\033[2m"
 C_BOLD = "\033[1m"
 CATEGORY_COLORS = {
-    "auth": "\033[36m",       # cyan
-    "social": "\033[35m",     # magenta
+    "auth": "\033[36m",  # cyan
+    "social": "\033[35m",  # magenta
     "inventory": "\033[33m",  # yellow
-    "match": "\033[31m",      # red
-    "ranked": "\033[31m",     # red
-    "other": "\033[37m",      # white
+    "match": "\033[31m",  # red
+    "ranked": "\033[31m",  # red
+    "other": "\033[37m",  # white
 }
 
 # MARK: - Method categorization (mirrors build_protocol_spec.py)
 
+
 def categorize(method: str) -> str:
     lower = method.lower()
-    if any(k in lower for k in ("account", "guest", "auth", "session", "playerfromplatform", "handle", "devicetoken")):
+    if any(
+        k in lower
+        for k in (
+            "account",
+            "guest",
+            "auth",
+            "session",
+            "playerfromplatform",
+            "handle",
+            "devicetoken",
+        )
+    ):
         return "auth"
-    if any(k in lower for k in ("friend", "guild", "party", "team", "presence", "lobby")):
+    if any(
+        k in lower for k in ("friend", "guild", "party", "team", "presence", "lobby")
+    ):
         return "social"
-    if any(k in lower for k in ("inventory", "skin", "card", "forge", "quest", "reward", "chest", "talent", "equip", "purchase")):
+    if any(
+        k in lower
+        for k in (
+            "inventory",
+            "skin",
+            "card",
+            "forge",
+            "quest",
+            "reward",
+            "chest",
+            "talent",
+            "equip",
+            "purchase",
+        )
+    ):
         return "inventory"
-    if any(k in lower for k in ("match", "leaderboard", "liveevent", "season", "ascension", "spectat", "honor", "elo")):
+    if any(
+        k in lower
+        for k in (
+            "match",
+            "leaderboard",
+            "liveevent",
+            "season",
+            "ascension",
+            "spectat",
+            "honor",
+            "elo",
+        )
+    ):
         return "match"
     return "other"
 
+
 # MARK: - High-value field extractors
+
 
 def extract_session(data: dict) -> dict:
     out = {}
-    for key in ("sessionToken", "playerUUID", "platformUrl", "eloTier3v3", "eloTier5v5", "skillTier"):
+    for key in (
+        "sessionToken",
+        "playerUUID",
+        "platformUrl",
+        "eloTier3v3",
+        "eloTier5v5",
+        "skillTier",
+    ):
         val = data.get(key)
         if val is not None:
             out[key] = val
     pi = data.get("playerInfo")
     if isinstance(pi, dict):
-        for key in ("eloTier3v3", "eloTier5v5", "skillTier", "playerUUID", "playerHandle"):
+        for key in (
+            "eloTier3v3",
+            "eloTier5v5",
+            "skillTier",
+            "playerUUID",
+            "playerHandle",
+        ):
             val = pi.get(key)
             if val is not None:
                 out[key] = val
     return out
 
+
 def extract_player_info(data: dict) -> dict:
     out = {}
     pi = data.get("playerInfo") or data
-    for key in ("playerUUID", "playerHandle", "skillTier", "eloTier3v3", "eloTier5v5",
-                "rank", "wins_ranked", "wins_casual", "wins_blitz", "wins_aral"):
+    for key in (
+        "playerUUID",
+        "playerHandle",
+        "skillTier",
+        "eloTier3v3",
+        "eloTier5v5",
+        "rank",
+        "wins_ranked",
+        "wins_casual",
+        "wins_blitz",
+        "wins_aral",
+    ):
         val = pi.get(key)
         if val is not None:
             out[key] = val
     return out
+
 
 def extract_match_results(data: dict) -> dict:
     out = {}
@@ -169,6 +239,7 @@ def extract_match_results(data: dict) -> dict:
         if val is not None:
             out[key] = val
     return out
+
 
 def extract_leaderboard(data: dict) -> dict:
     rv = data.get("returnValue", data)
@@ -182,6 +253,7 @@ def extract_leaderboard(data: dict) -> dict:
                     total += len(lb)
             return {"events": len(events), "entries": total}
     return {}
+
 
 EXTRACTORS = {
     "startSessionForPlayer": extract_session,
@@ -226,9 +298,18 @@ def _make_leader(handle, player_uuid, score, skill_tier=12, level=30, rank=0):
     }
 
 
-def _make_friend(handle, player_uuid, availability="online", skill_tier=10,
-                  level=30, guild_name="", guild_tag="", guild_id="",
-                  seasonal_wins=100, favorite=False):
+def _make_friend(
+    handle,
+    player_uuid,
+    availability="online",
+    skill_tier=10,
+    level=30,
+    guild_name="",
+    guild_tag="",
+    guild_id="",
+    seasonal_wins=100,
+    favorite=False,
+):
     """Build a friend entry matching the schema parsed by FUN_1004edef0.
 
     Key field names derived from RE analysis of the friendListAll response
@@ -256,27 +337,86 @@ def _make_friend(handle, player_uuid, availability="online", skill_tier=10,
 
 
 FAKE_LEADERS = [
-    _make_leader("vphone",      "PLACEHOLDER",  3000, 12, 30, 1),
-    _make_leader("FlashX",      str(_uuid.uuid4()), 2950, 12, 30, 2),
-    _make_leader("VONC",        str(_uuid.uuid4()), 2920, 12, 30, 3),
-    _make_leader("DNZio",       str(_uuid.uuid4()), 2890, 12, 29, 4),
-    _make_leader("IraqiZorro",  str(_uuid.uuid4()), 2860, 12, 29, 5),
-    _make_leader("Oldskool",    str(_uuid.uuid4()), 2830, 11, 29, 6),
-    _make_leader("gabevizzle",  str(_uuid.uuid4()), 2800, 11, 28, 7),
-    _make_leader("ttigers",     str(_uuid.uuid4()), 2770, 11, 28, 8),
-    _make_leader("MaxGreen",    str(_uuid.uuid4()), 2740, 11, 27, 9),
-    _make_leader("Hami",        str(_uuid.uuid4()), 2710, 11, 27, 10),
+    _make_leader("vphone", "PLACEHOLDER", 3000, 12, 30, 1),
+    _make_leader("FlashX", str(_uuid.uuid4()), 2950, 12, 30, 2),
+    _make_leader("VONC", str(_uuid.uuid4()), 2920, 12, 30, 3),
+    _make_leader("DNZio", str(_uuid.uuid4()), 2890, 12, 29, 4),
+    _make_leader("IraqiZorro", str(_uuid.uuid4()), 2860, 12, 29, 5),
+    _make_leader("Oldskool", str(_uuid.uuid4()), 2830, 11, 29, 6),
+    _make_leader("gabevizzle", str(_uuid.uuid4()), 2800, 11, 28, 7),
+    _make_leader("ttigers", str(_uuid.uuid4()), 2770, 11, 28, 8),
+    _make_leader("MaxGreen", str(_uuid.uuid4()), 2740, 11, 27, 9),
+    _make_leader("Hami", str(_uuid.uuid4()), 2710, 11, 27, 10),
 ]
 
 FAKE_FRIENDS = [
-    _make_friend("CatherineMain", str(_uuid.uuid4()), "online",  11, 30, "Stormguard", "SG", str(_uuid.uuid4()), 342, True),
-    _make_friend("GwenSniper",    str(_uuid.uuid4()), "offline", 10, 28, "Halcyon",    "HC", str(_uuid.uuid4()), 218, False),
-    _make_friend("TakaJungle",    str(_uuid.uuid4()), "online",  12, 30, "",           "",   "",                 567, True),
-    _make_friend("VoxCarry",      str(_uuid.uuid4()), "online",  10, 27, "Grangor",    "GR", str(_uuid.uuid4()), 431, False),
-    _make_friend("CelesteMid",    str(_uuid.uuid4()), "offline", 11, 29, "Halcyon",    "HC", str(_uuid.uuid4()), 612, True),
-    _make_friend("ArданSupport",  str(_uuid.uuid4()), "online",   9, 25, "",           "",   "",                 189, False),
-    _make_friend("KrulWP",        str(_uuid.uuid4()), "online",  10, 26, "Stormguard", "SG", str(_uuid.uuid4()), 445, True),
-    _make_friend("Skaarf",        str(_uuid.uuid4()), "offline",  8, 22, "",           "",   "",                  95, False),
+    _make_friend(
+        "CatherineMain",
+        str(_uuid.uuid4()),
+        "online",
+        11,
+        30,
+        "Stormguard",
+        "SG",
+        str(_uuid.uuid4()),
+        342,
+        True,
+    ),
+    _make_friend(
+        "GwenSniper",
+        str(_uuid.uuid4()),
+        "offline",
+        10,
+        28,
+        "Halcyon",
+        "HC",
+        str(_uuid.uuid4()),
+        218,
+        False,
+    ),
+    _make_friend(
+        "TakaJungle", str(_uuid.uuid4()), "online", 12, 30, "", "", "", 567, True
+    ),
+    _make_friend(
+        "VoxCarry",
+        str(_uuid.uuid4()),
+        "online",
+        10,
+        27,
+        "Grangor",
+        "GR",
+        str(_uuid.uuid4()),
+        431,
+        False,
+    ),
+    _make_friend(
+        "CelesteMid",
+        str(_uuid.uuid4()),
+        "offline",
+        11,
+        29,
+        "Halcyon",
+        "HC",
+        str(_uuid.uuid4()),
+        612,
+        True,
+    ),
+    _make_friend(
+        "ArданSupport", str(_uuid.uuid4()), "online", 9, 25, "", "", "", 189, False
+    ),
+    _make_friend(
+        "KrulWP",
+        str(_uuid.uuid4()),
+        "online",
+        10,
+        26,
+        "Stormguard",
+        "SG",
+        str(_uuid.uuid4()),
+        445,
+        True,
+    ),
+    _make_friend("Skaarf", str(_uuid.uuid4()), "offline", 8, 22, "", "", "", 95, False),
 ]
 
 
@@ -293,17 +433,21 @@ def _make_party_member(handle, player_uuid, is_captain=False, team=0, slot=0):
         "qbanLevel": 0,
     }
 
+
 # MARK: - Helpers
+
 
 def is_vg_domain(host: str) -> bool:
     if host.split(":")[0] == HOST_IP:
         return True
     return any(pattern in host for pattern in VG_DOMAIN_PATTERNS)
 
+
 def extract_method_from_url(path: str) -> str | None:
     if "/JSONRpc/" in path:
         return path.rsplit("/JSONRpc/", 1)[-1].split("?")[0]
     return None
+
 
 def parse_json_body(raw: bytes | None) -> dict | None:
     if not raw:
@@ -313,10 +457,13 @@ def parse_json_body(raw: bytes | None) -> dict | None:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
 
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
+
 # MARK: - Addon
+
 
 def resolve_real_ip(hostname: str) -> str | None:
     """Resolve a hostname to its real IP, bypassing /etc/hosts on the VM.
@@ -340,20 +487,23 @@ class VGInterceptor:
         print(f"[vg_interceptor] logging to {LOG_FILE}", file=sys.stderr)
 
     def request(self, flow: http.HTTPFlow) -> None:
-        """Serve ELO bridge config for the dylib."""
-        if flow.request.path == "/vg_elo_config":
+        """Intercept custom endpoints before they are forwarded upstream."""
+        if flow.request.path.endswith("/vg_elo_config"):
             config = {
-                "5v5_eloBucket": 29,
-                "3v3_eloBucket": 29,
-                "5v5_eloEarned": 3000,
-                "3v3_eloEarned": 3000,
+                "5v5_eloBucket": 69,
+                "3v3_eloBucket": 69,
+                "5v5_eloEarned": 1500,
+                "3v3_eloEarned": 1500,
             }
             flow.response = http.Response.make(
                 200,
                 json.dumps(config).encode("utf-8"),
                 {"Content-Type": "application/json"},
             )
-            return
+            print(
+                f"[vg_interceptor] served /vg_elo_config (not forwarded)",
+                file=sys.stderr,
+            )
 
     def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Fix upstream address when game connects to our host via /etc/hosts."""
@@ -367,13 +517,18 @@ class VGInterceptor:
                 real_ip = resolve_real_ip(hostname)
                 if real_ip:
                     flow.server_conn.address = (real_ip, dest_port)
-                    print(f"[vg_interceptor] reroute {hostname}: {HOST_IP} -> {real_ip}:{dest_port}", file=sys.stderr)
+                    print(
+                        f"[vg_interceptor] reroute {hostname}: {HOST_IP} -> {real_ip}:{dest_port}",
+                        file=sys.stderr,
+                    )
 
     def _write_log(self, entry: dict) -> None:
         line = json.dumps(entry, ensure_ascii=False, default=str)
         self._log_handle.write(line + "\n")
 
-    def _print_summary(self, method: str, category: str, status: int, extracted: dict) -> None:
+    def _print_summary(
+        self, method: str, category: str, status: int, extracted: dict
+    ) -> None:
         color = CATEGORY_COLORS.get(category, CATEGORY_COLORS["other"])
         self._count += 1
 
@@ -398,7 +553,11 @@ class VGInterceptor:
             return
 
         # Get client IP for per-user session lookup
-        client_ip = flow.client_conn.address[0] if flow.client_conn and flow.client_conn.address else "unknown"
+        client_ip = (
+            flow.client_conn.address[0]
+            if flow.client_conn and flow.client_conn.address
+            else "unknown"
+        )
         session = _get_session(client_ip)
 
         url = flow.request.pretty_url
@@ -416,7 +575,9 @@ class VGInterceptor:
         category = categorize(method)
 
         # Parse response
-        res_body = parse_json_body(flow.response.get_content() if flow.response else None)
+        res_body = parse_json_body(
+            flow.response.get_content() if flow.response else None
+        )
 
         # MARK: - Response modification
         if isinstance(res_body, dict):
@@ -452,11 +613,21 @@ class VGInterceptor:
         # Log to DB in background
         _db_enqueue(
             _safe_insert_rpc_log,
-            session.get("user_id"), ts, method, category, status,
-            url, host, req_body, res_body, extracted or None,
+            session.get("user_id"),
+            ts,
+            method,
+            category,
+            status,
+            url,
+            host,
+            req_body,
+            res_body,
+            extracted or None,
         )
 
-    def _modify_response(self, method: str, res: dict, session: dict, req_body: dict | None = None) -> bool:
+    def _modify_response(
+        self, method: str, res: dict, session: dict, req_body: dict | None = None
+    ) -> bool:
         """Modify response data in-place. Returns True if modified."""
         # Patches to apply to playerInfo wherever it appears
         PLAYER_PATCHES = {
@@ -500,7 +671,9 @@ class VGInterceptor:
                 if key in obj and obj[key] != val:
                     old = obj[key]
                     obj[key] = val
-                    print(f"\033[33m[PATCH]\033[0m {key}: {old} -> {val}", file=sys.stderr)
+                    print(
+                        f"\033[33m[PATCH]\033[0m {key}: {old} -> {val}", file=sys.stderr
+                    )
                     changed = True
             # Patch currency dict
             cur = obj.get("currency")
@@ -509,7 +682,10 @@ class VGInterceptor:
                     if key in cur and cur[key] != val:
                         old = cur[key]
                         cur[key] = val
-                        print(f"\033[33m[PATCH]\033[0m currency.{key}: {old} -> {val}", file=sys.stderr)
+                        print(
+                            f"\033[33m[PATCH]\033[0m currency.{key}: {old} -> {val}",
+                            file=sys.stderr,
+                        )
                         changed = True
             # Patch skillProgressionInfo — fill in all ranked data so the profile
             # tabs actually render. The client parser FUN_10051cde8 reads each mode.
@@ -542,7 +718,10 @@ class VGInterceptor:
                                 data[key] = target
                                 changed = True
                 if changed:
-                    print(f"\033[33m[PATCH]\033[0m skillProgressionInfo: all modes patched to Vainglorious", file=sys.stderr)
+                    print(
+                        f"\033[33m[PATCH]\033[0m skillProgressionInfo: all modes patched to Vainglorious",
+                        file=sys.stderr,
+                    )
             # Patch trophyCase — set all trophies to Vainglorious (12)
             # The trophy renderer FUN_100265bd4 checks a flag at +0x18f21 which is
             # set to true when any trophy value > 0. Patching -1 → 12 ensures this.
@@ -554,21 +733,29 @@ class VGInterceptor:
                         trophy["value"] = 29
                         patched_count += 1
                 # Ensure all 19 seasons × 2 trophy types are present
-                existing = {(t.get("season"), t.get("trophy_name"))
-                            for t in trophies if isinstance(t, dict)}
+                existing = {
+                    (t.get("season"), t.get("trophy_name"))
+                    for t in trophies
+                    if isinstance(t, dict)
+                }
                 for season in range(0, 19):
                     for name in ("individual_skill_tier", "individual_5v5_skill_tier"):
                         if (season, name) not in existing:
-                            trophies.append({
-                                "season": season,
-                                "value_type": "skill_tier",
-                                "trophy_type": "individual",
-                                "value": 29,
-                                "trophy_name": name,
-                            })
+                            trophies.append(
+                                {
+                                    "season": season,
+                                    "value_type": "skill_tier",
+                                    "trophy_type": "individual",
+                                    "value": 29,
+                                    "trophy_name": name,
+                                }
+                            )
                             patched_count += 1
                 if patched_count:
-                    print(f"\033[33m[PATCH]\033[0m trophyCase: {patched_count} trophies patched/added ({len(trophies)} total)", file=sys.stderr)
+                    print(
+                        f"\033[33m[PATCH]\033[0m trophyCase: {patched_count} trophies patched/added ({len(trophies)} total)",
+                        file=sys.stderr,
+                    )
                     changed = True
             return changed
 
@@ -584,7 +771,10 @@ class VGInterceptor:
                     for flag in ("inGameChat", "leaderboards", "liveEvents"):
                         if flag in features and not features[flag]:
                             features[flag] = True
-                            print(f"\033[35m[FEATURE]\033[0m featuresEnabled.{flag}: false -> true", file=sys.stderr)
+                            print(
+                                f"\033[35m[FEATURE]\033[0m featuresEnabled.{flag}: false -> true",
+                                file=sys.stderr,
+                            )
                             changed = True
                     # Also enable leaderboards full friends list
                     if "leaderboardsAlwaysQueryOfflineFriends" in features:
@@ -607,7 +797,10 @@ class VGInterceptor:
                     eid = exp.get("experimentId", "")
                     if eid in FORCE_ACTIVE and not exp.get("isActive"):
                         exp["isActive"] = True
-                        print(f"\033[35m[FEATURE]\033[0m experiment {eid}: activated", file=sys.stderr)
+                        print(
+                            f"\033[35m[FEATURE]\033[0m experiment {eid}: activated",
+                            file=sys.stderr,
+                        )
                         changed = True
 
             # Enable state updates (WebSocket notify channel)
@@ -618,18 +811,31 @@ class VGInterceptor:
                 if "notifyUrl" in rv:
                     old_url = rv["notifyUrl"]
                     # Extract playerUUID path from ws://host:port/ws/<uuid>
-                    ws_path = old_url.rsplit("/", 1)[-1] if "/" in old_url else session["player_uuid"]
+                    ws_path = (
+                        old_url.rsplit("/", 1)[-1]
+                        if "/" in old_url
+                        else session["player_uuid"]
+                    )
                     rv["notifyUrl"] = f"ws://{HOST_IP}:2112/ws/{ws_path}"
                     rv["notifyFallbackUrl"] = f"http://{HOST_IP}:2112/lp/{ws_path}"
-                    print(f"\033[35m[FEATURE]\033[0m notifyUrl: {old_url} -> {rv['notifyUrl']}", file=sys.stderr)
-                print(f"\033[35m[FEATURE]\033[0m enableStateUpdates: true", file=sys.stderr)
+                    print(
+                        f"\033[35m[FEATURE]\033[0m notifyUrl: {old_url} -> {rv['notifyUrl']}",
+                        file=sys.stderr,
+                    )
+                print(
+                    f"\033[35m[FEATURE]\033[0m enableStateUpdates: true",
+                    file=sys.stderr,
+                )
                 changed = True
 
             # Rewrite platformUrl so all post-session RPC goes through our proxy
             old_platform_url = rv.get("platformUrl")
             if isinstance(old_platform_url, str) and HOST_IP not in old_platform_url:
                 rv["platformUrl"] = f"https://{HOST_IP}"
-                print(f"\033[35m[FEATURE]\033[0m platformUrl: {old_platform_url} -> {rv['platformUrl']}", file=sys.stderr)
+                print(
+                    f"\033[35m[FEATURE]\033[0m platformUrl: {old_platform_url} -> {rv['platformUrl']}",
+                    file=sys.stderr,
+                )
                 changed = True
 
             # Patch seasonalData — season ended 2020-04-09, extend to future
@@ -641,7 +847,10 @@ class VGInterceptor:
                     now = int(_time.time())
                     if sd.get("endSeasonEpoch", 0) < now:
                         sd["endSeasonEpoch"] = now + 86400 * 365  # 1 year from now
-                        print(f"\033[35m[FEATURE]\033[0m seasonalData.endSeasonEpoch: extended to {sd['endSeasonEpoch']}", file=sys.stderr)
+                        print(
+                            f"\033[35m[FEATURE]\033[0m seasonalData.endSeasonEpoch: extended to {sd['endSeasonEpoch']}",
+                            file=sys.stderr,
+                        )
                         changed = True
                     if sd.get("seasonIndex", 0) != 18:
                         sd["seasonIndex"] = 18
@@ -658,7 +867,10 @@ class VGInterceptor:
             old_session_url = rv.get("startSessionUrl")
             if isinstance(old_session_url, str) and HOST_IP not in old_session_url:
                 rv["startSessionUrl"] = f"https://{HOST_IP}"
-                print(f"\033[33m[PATCH]\033[0m startSessionUrl: {old_session_url} -> {rv['startSessionUrl']}", file=sys.stderr)
+                print(
+                    f"\033[33m[PATCH]\033[0m startSessionUrl: {old_session_url} -> {rv['startSessionUrl']}",
+                    file=sys.stderr,
+                )
                 modified = True
             pi = rv.get("playerInfo")
             if isinstance(pi, dict):
@@ -666,7 +878,10 @@ class VGInterceptor:
             modified |= patch_player_info(rv)
             # Patch handle at returnValue level too (startSessionForPlayer has it here)
             if "handle" in rv and rv["handle"] != "vphone":
-                print(f"\033[33m[PATCH]\033[0m handle: {rv['handle']} -> vphone", file=sys.stderr)
+                print(
+                    f"\033[33m[PATCH]\033[0m handle: {rv['handle']} -> vphone",
+                    file=sys.stderr,
+                )
                 rv["handle"] = "vphone"
                 modified = True
             # Patch feature flags (only in startSessionForPlayer response)
@@ -692,7 +907,9 @@ class VGInterceptor:
 
         return modified
 
-    def _inject_social_data(self, method: str, res: dict, session: dict, req_body: dict | None = None) -> bool:
+    def _inject_social_data(
+        self, method: str, res: dict, session: dict, req_body: dict | None = None
+    ) -> bool:
         """Inject fake friends/leaderboard/live-event data into empty responses.
 
         The E.V.I.L. engine hides UI panels when the server returns empty data.
@@ -713,8 +930,10 @@ class VGInterceptor:
                 # Register user in DB
                 _db_enqueue(
                     _safe_upsert_user,
-                    session["player_uuid"], session["player_handle"],
-                    session["client_ip"], session,
+                    session["player_uuid"],
+                    session["player_handle"],
+                    session["client_ip"],
+                    session,
                 )
 
         # ── Leaderboard injection ──
@@ -763,7 +982,10 @@ class VGInterceptor:
                         },
                     ],
                 }
-                print(f"\033[35m[INJECT]\033[0m getLeaderboardData: {len(leaders)} entries in 1 event", file=sys.stderr)
+                print(
+                    f"\033[35m[INJECT]\033[0m getLeaderboardData: {len(leaders)} entries in 1 event",
+                    file=sys.stderr,
+                )
                 modified = True
 
         # ── Friends list injection ──
@@ -781,7 +1003,10 @@ class VGInterceptor:
                 rv["numFriends"] = len(FAKE_FRIENDS)
                 online = sum(1 for f in FAKE_FRIENDS if f["availability"] != "offline")
                 rv["numOffline"] = len(FAKE_FRIENDS) - online
-                print(f"\033[35m[INJECT]\033[0m friendListAll: {len(FAKE_FRIENDS)} friends ({online} online)", file=sys.stderr)
+                print(
+                    f"\033[35m[INJECT]\033[0m friendListAll: {len(FAKE_FRIENDS)} friends ({online} online)",
+                    file=sys.stderr,
+                )
                 modified = True
 
         # ── Trophy case injection ──
@@ -795,20 +1020,24 @@ class VGInterceptor:
             if not isinstance(rv, dict) or not rv.get("trophyCase"):
                 trophies = []
                 for season in range(0, 19):
-                    trophies.append({
-                        "season": season,
-                        "value_type": "skill_tier",
-                        "trophy_type": "individual",
-                        "value": 29,  # Vainglorious Gold (0-29 scale: tier = val/3+1, sub = val%3)
-                        "trophy_name": "individual_skill_tier",
-                    })
-                    trophies.append({
-                        "season": season,
-                        "value_type": "skill_tier",
-                        "trophy_type": "individual",
-                        "value": 29,
-                        "trophy_name": "individual_5v5_skill_tier",
-                    })
+                    trophies.append(
+                        {
+                            "season": season,
+                            "value_type": "skill_tier",
+                            "trophy_type": "individual",
+                            "value": 29,  # Vainglorious Gold (0-29 scale: tier = val/3+1, sub = val%3)
+                            "trophy_name": "individual_skill_tier",
+                        }
+                    )
+                    trophies.append(
+                        {
+                            "season": season,
+                            "value_type": "skill_tier",
+                            "trophy_type": "individual",
+                            "value": 29,
+                            "trophy_name": "individual_5v5_skill_tier",
+                        }
+                    )
                 if not isinstance(rv, dict):
                     res["returnValue"] = rv = {}
                 rv["success"] = True
@@ -818,7 +1047,10 @@ class VGInterceptor:
                 rv["tag"] = ""
                 rv["numMembers"] = 0
                 rv["maxMembers"] = 50
-                print(f"\033[35m[INJECT]\033[0m getTrophyCase: {len(trophies)} trophies (all Vainglorious)", file=sys.stderr)
+                print(
+                    f"\033[35m[INJECT]\033[0m getTrophyCase: {len(trophies)} trophies (all Vainglorious)",
+                    file=sys.stderr,
+                )
                 modified = True
 
         # ── Season rewards manifest injection ──
@@ -827,19 +1059,32 @@ class VGInterceptor:
             if not isinstance(rv, dict) or not rv.get("seasonRewards"):
                 season_rewards = []
                 for season in range(0, 19):
-                    season_rewards.append({
-                        "season": season,
-                        "rewards": [
-                            {"type": "skin", "name": f"season_{season}_reward_skin", "tier": min(season % 4 + 1, 4)},
-                            {"type": "badge", "name": f"season_{season}_badge", "tier": 12},
-                        ],
-                    })
+                    season_rewards.append(
+                        {
+                            "season": season,
+                            "rewards": [
+                                {
+                                    "type": "skin",
+                                    "name": f"season_{season}_reward_skin",
+                                    "tier": min(season % 4 + 1, 4),
+                                },
+                                {
+                                    "type": "badge",
+                                    "name": f"season_{season}_badge",
+                                    "tier": 12,
+                                },
+                            ],
+                        }
+                    )
                 if not isinstance(rv, dict):
                     res["returnValue"] = rv = {}
                 rv["success"] = True
                 rv["seasonRewards"] = season_rewards
                 rv["currentSeason"] = 18
-                print(f"\033[35m[INJECT]\033[0m getSeasonRewardsManifest: {len(season_rewards)} seasons", file=sys.stderr)
+                print(
+                    f"\033[35m[INJECT]\033[0m getSeasonRewardsManifest: {len(season_rewards)} seasons",
+                    file=sys.stderr,
+                )
                 modified = True
 
         # ── Ascension display data injection ──
@@ -858,7 +1103,10 @@ class VGInterceptor:
                     "combinedRank": 15,
                     "rewards": [],
                 }
-                print(f"\033[35m[INJECT]\033[0m getAscensionDisplayData: rank 50", file=sys.stderr)
+                print(
+                    f"\033[35m[INJECT]\033[0m getAscensionDisplayData: rank 50",
+                    file=sys.stderr,
+                )
                 modified = True
 
         # ── Live events injection ──
@@ -867,16 +1115,21 @@ class VGInterceptor:
             if not rv or not isinstance(rv, dict) or not rv.get("events"):
                 now = int(_time.time())
                 res["returnValue"] = {
-                    "events": [{
-                        "eventType": "generic",
-                        "panelTitle": "Community Cup",
-                        "startDate": now - 86400,
-                        "endDate": now + 86400 * 6,
-                        "eventProgressBars": [],
-                        "eventLeaderboardProgress": {},
-                    }]
+                    "events": [
+                        {
+                            "eventType": "generic",
+                            "panelTitle": "Community Cup",
+                            "startDate": now - 86400,
+                            "endDate": now + 86400 * 6,
+                            "eventProgressBars": [],
+                            "eventLeaderboardProgress": {},
+                        }
+                    ]
                 }
-                print(f"\033[35m[INJECT]\033[0m getLiveEventData: 1 event", file=sys.stderr)
+                print(
+                    f"\033[35m[INJECT]\033[0m getLiveEventData: 1 event",
+                    file=sys.stderr,
+                )
                 modified = True
 
         # ── Party system ──
@@ -898,7 +1151,9 @@ class VGInterceptor:
 
         if method == "createParty":
             session["party_uuid"] = str(_uuid.uuid4())
-            session["party_members"] = [_make_party_member(_player_handle, _player_uuid, is_captain=True)]
+            session["party_members"] = [
+                _make_party_member(_player_handle, _player_uuid, is_captain=True)
+            ]
             res["returnValue"] = {
                 "success": True,
                 "partyUUID": session["party_uuid"],
@@ -907,12 +1162,17 @@ class VGInterceptor:
                 "members": list(session["party_members"]),
             }
             res["code"] = 0
-            print(f"\033[35m[PARTY]\033[0m createParty: {session['party_uuid'][:8]}", file=sys.stderr)
+            print(
+                f"\033[35m[PARTY]\033[0m createParty: {session['party_uuid'][:8]}",
+                file=sys.stderr,
+            )
             return True
 
         if method == "createQuintParty":
             session["party_uuid"] = str(_uuid.uuid4())
-            session["party_members"] = [_make_party_member(_player_handle, _player_uuid, is_captain=True)]
+            session["party_members"] = [
+                _make_party_member(_player_handle, _player_uuid, is_captain=True)
+            ]
             res["returnValue"] = {
                 "success": True,
                 "partyUUID": session["party_uuid"],
@@ -921,7 +1181,10 @@ class VGInterceptor:
                 "members": list(session["party_members"]),
             }
             res["code"] = 0
-            print(f"\033[35m[PARTY]\033[0m createQuintParty: {session['party_uuid'][:8]}", file=sys.stderr)
+            print(
+                f"\033[35m[PARTY]\033[0m createQuintParty: {session['party_uuid'][:8]}",
+                file=sys.stderr,
+            )
             return True
 
         if method in ("partyMembers", "queryPartyInfo", "queryPartyInvites"):
@@ -933,13 +1196,21 @@ class VGInterceptor:
                 "members": list(session["party_members"]),
             }
             res["code"] = 0
-            print(f"\033[35m[PARTY]\033[0m {method}: {len(session['party_members'])} members", file=sys.stderr)
+            print(
+                f"\033[35m[PARTY]\033[0m {method}: {len(session['party_members'])} members",
+                file=sys.stderr,
+            )
             return True
 
         if method == "partyInviteSend":
             # Pretend it worked — add a fake member to the party
             fake_member = _make_party_member(
-                "TakaJungle", str(_uuid.uuid4()), is_captain=False, team=0, slot=len(session["party_members"]))
+                "TakaJungle",
+                str(_uuid.uuid4()),
+                is_captain=False,
+                team=0,
+                slot=len(session["party_members"]),
+            )
             session["party_members"].append(fake_member)
             res["returnValue"] = {
                 "success": True,
@@ -949,11 +1220,20 @@ class VGInterceptor:
                 "members": list(session["party_members"]),
             }
             res["code"] = 0
-            print(f"\033[35m[PARTY]\033[0m partyInviteSend: now {len(session['party_members'])} members", file=sys.stderr)
+            print(
+                f"\033[35m[PARTY]\033[0m partyInviteSend: now {len(session['party_members'])} members",
+                file=sys.stderr,
+            )
             return True
 
-        if method in ("partyInviteConfirm", "partyInviteReject", "partyMemberKick",
-                       "partyMemberMove", "partyChangeQueueMode", "partyBalanceTeams"):
+        if method in (
+            "partyInviteConfirm",
+            "partyInviteReject",
+            "partyMemberKick",
+            "partyMemberMove",
+            "partyChangeQueueMode",
+            "partyBalanceTeams",
+        ):
             res["returnValue"] = {
                 "success": True,
                 "partyUUID": session["party_uuid"] or "",
@@ -979,7 +1259,9 @@ class VGInterceptor:
                 "partyUUID": session["party_uuid"] or str(_uuid.uuid4()),
                 "partyQueueMode": "casual_5v5",
                 "partyQueueDifficulty": 0,
-                "members": list(session["party_members"]) if session["party_members"] else [
+                "members": list(session["party_members"])
+                if session["party_members"]
+                else [
                     _make_party_member(_player_handle, _player_uuid, is_captain=True)
                 ],
             }
@@ -995,7 +1277,9 @@ class VGInterceptor:
 
         return False
 
-    def _handle_dead_endpoint(self, method: str, res: dict, session: dict, req_body: dict | None = None) -> bool:
+    def _handle_dead_endpoint(
+        self, method: str, res: dict, session: dict, req_body: dict | None = None
+    ) -> bool:
         """Catch-all: return valid responses for dead endpoints the client may call.
 
         Response types from RE analysis (GhidraRpcSchemaExtractor):
@@ -1011,18 +1295,38 @@ class VGInterceptor:
         if code is not None and code == 0 and rv is not None:
             return False
         # Skip methods we already handle above
-        if method in ("friendListAll", "getLeaderboardData", "getLiveEventData",
-                       "getTrophyCase", "getSeasonRewardsManifest",
-                       "getAscensionDisplayData", "startSessionForPlayer",
-                       "createGuestPlayer", "getPlayerForGuestAccount",
-                       "getPlayerFromPlatform", "authenticate",
-                       "createParty", "createQuintParty", "partyMembers",
-                       "partyInviteSend", "partyInviteConfirm", "partyInviteReject",
-                       "partyMemberKick", "partyMemberMove", "partyChangeQueueMode",
-                       "partyBalanceTeams", "leaveParty", "destroyQuintParty",
-                       "leaveQuintParty", "joinQuintParty", "updateQuintPartyState",
-                       "partyLobbyEnter", "partyLobbyExit", "queryPartyInfo",
-                       "queryPartyInvites"):
+        if method in (
+            "friendListAll",
+            "getLeaderboardData",
+            "getLiveEventData",
+            "getTrophyCase",
+            "getSeasonRewardsManifest",
+            "getAscensionDisplayData",
+            "startSessionForPlayer",
+            "createGuestPlayer",
+            "getPlayerForGuestAccount",
+            "getPlayerFromPlatform",
+            "authenticate",
+            "createParty",
+            "createQuintParty",
+            "partyMembers",
+            "partyInviteSend",
+            "partyInviteConfirm",
+            "partyInviteReject",
+            "partyMemberKick",
+            "partyMemberMove",
+            "partyChangeQueueMode",
+            "partyBalanceTeams",
+            "leaveParty",
+            "destroyQuintParty",
+            "leaveQuintParty",
+            "joinQuintParty",
+            "updateQuintPartyState",
+            "partyLobbyEnter",
+            "partyLobbyExit",
+            "queryPartyInfo",
+            "queryPartyInvites",
+        ):
             return False
 
         # ── notifyGameResults: client sends match results to server post-match ──
@@ -1034,10 +1338,17 @@ class VGInterceptor:
         _player_uuid = session["player_uuid"]
 
         if method == "notifyGameResults":
-            print(f"\033[33;1m[MATCH-RESULTS]\033[0m notifyGameResults RECEIVED!", file=sys.stderr)
+            print(
+                f"\033[33;1m[MATCH-RESULTS]\033[0m notifyGameResults RECEIVED!",
+                file=sys.stderr,
+            )
             if req_body:
                 import json as _json
-                print(f"\033[33;1m[MATCH-RESULTS]\033[0m request body: {_json.dumps(req_body, indent=2)[:2000]}", file=sys.stderr)
+
+                print(
+                    f"\033[33;1m[MATCH-RESULTS]\033[0m request body: {_json.dumps(req_body, indent=2)[:2000]}",
+                    file=sys.stderr,
+                )
             res["code"] = 0
             res["returnValue"] = {
                 "handle": _player_handle,
@@ -1058,8 +1369,12 @@ class VGInterceptor:
                 "levelMinXP": 5000,
                 "levelMaxXP": 10000,
                 "currency": {
-                    "gold": 100200, "essence": 99999, "opal": 99999,
-                    "silver": 99999, "epic_key": 99, "seasonal_key": 99,
+                    "gold": 100200,
+                    "essence": 99999,
+                    "opal": 99999,
+                    "silver": 99999,
+                    "epic_key": 99,
+                    "seasonal_key": 99,
                 },
                 "karma": 160.0,
                 "karmaLevel": 2,
@@ -1069,29 +1384,46 @@ class VGInterceptor:
                 "canUseAllHeroes": True,
                 "skillProgressionInfo": {
                     "ranked": {
-                        "skillTier": 29, "seasonMaxSkillTier": 29,
-                        "eloEarned": 3020.0, "seasonEloEarned": 3020.0,
+                        "skillTier": 29,
+                        "seasonMaxSkillTier": 29,
+                        "eloEarned": 3020.0,
+                        "seasonEloEarned": 3020.0,
                         "eloEarnedDelta": 20.0,
-                        "skillTierProgress": 0.96, "skillTierBronzeLine": 0.0,
-                        "skillTierSilverLine": 0.8333, "skillTierGoldLine": 0.9166,
+                        "skillTierProgress": 0.5,
+                        "skillTierBronzeLine": 0.5,
+                        "skillTierSilverLine": 0.5,
+                        "skillTierGoldLine": 0.5,
                     },
                     "5v5_pvp_ranked": {
-                        "skillTier": 29, "seasonMaxSkillTier": 29,
-                        "eloEarned": 3020.0, "seasonEloEarned": 3020.0,
+                        "skillTier": 29,
+                        "seasonMaxSkillTier": 29,
+                        "eloEarned": 3020.0,
+                        "seasonEloEarned": 3020.0,
                         "eloEarnedDelta": 20.0,
-                        "skillTierProgress": 0.96, "skillTierBronzeLine": 0.0,
-                        "skillTierSilverLine": 0.8333, "skillTierGoldLine": 0.9166,
+                        "skillTierProgress": 0.5,
+                        "skillTierBronzeLine": 0.5,
+                        "skillTierSilverLine": 0.5,
+                        "skillTierGoldLine": 0.5,
                     },
                     "blitz_pvp_ranked": {
-                        "skillTier": 29, "seasonMaxSkillTier": 29,
-                        "eloEarned": 3020.0, "seasonEloEarned": 3020.0,
+                        "skillTier": 29,
+                        "seasonMaxSkillTier": 29,
+                        "eloEarned": 3020.0,
+                        "seasonEloEarned": 3020.0,
                         "eloEarnedDelta": 20.0,
-                        "skillTierProgress": 0.96, "skillTierBronzeLine": 0.0,
-                        "skillTierSilverLine": 0.8333, "skillTierGoldLine": 0.9166,
+                        "skillTierProgress": 0.96,
+                        "skillTierBronzeLine": 0.5,
+                        "skillTierSilverLine": 0.5,
+                        "skillTierGoldLine": 0.5,
                     },
                 },
                 "trophyCase": [
-                    {"season": s, "trophy_type": t, "value": 29, "trophy_name": "Vainglorious"}
+                    {
+                        "season": s,
+                        "trophy_type": t,
+                        "value": 29,
+                        "trophy_name": "Vainglorious",
+                    }
                     for s in range(19)
                     for t in ("individual_skill_tier", "individual_5v5_skill_tier")
                 ],
@@ -1099,7 +1431,10 @@ class VGInterceptor:
                 "guildUUID": "",
                 "teamUUID": "",
             }
-            print(f"\033[33;1m[MATCH-RESULTS]\033[0m returned playerInfoUpdate with match rewards", file=sys.stderr)
+            print(
+                f"\033[33;1m[MATCH-RESULTS]\033[0m returned playerInfoUpdate with match rewards",
+                file=sys.stderr,
+            )
             return True
 
         # ── notifyExitPostMatch: log request for analysis ──
@@ -1107,6 +1442,7 @@ class VGInterceptor:
             print(f"\033[36m[MATCH]\033[0m notifyExitPostMatch called", file=sys.stderr)
             if req_body:
                 import json as _json
+
                 keys = list(req_body.keys()) if isinstance(req_body, dict) else []
                 print(f"\033[36m[MATCH]\033[0m   request keys: {keys}", file=sys.stderr)
 
@@ -1115,7 +1451,11 @@ class VGInterceptor:
             print(f"\033[33;1m[MATCH-INFO]\033[0m {method} RECEIVED!", file=sys.stderr)
             if req_body:
                 import json as _json
-                print(f"\033[33;1m[MATCH-INFO]\033[0m request body: {_json.dumps(req_body, indent=2)[:2000]}", file=sys.stderr)
+
+                print(
+                    f"\033[33;1m[MATCH-INFO]\033[0m request body: {_json.dumps(req_body, indent=2)[:2000]}",
+                    file=sys.stderr,
+                )
             if rv is None or (isinstance(rv, dict) and not rv):
                 res["code"] = 0
                 res["returnValue"] = {
@@ -1125,58 +1465,109 @@ class VGInterceptor:
                     "level": 30,
                     "wins": 20001,
                     "completed": 40001,
-                    "currency": {"gold": 100200, "essence": 99999, "opal": 99999,
-                                 "silver": 99999, "epic_key": 99, "seasonal_key": 99},
+                    "currency": {
+                        "gold": 100200,
+                        "essence": 99999,
+                        "opal": 99999,
+                        "silver": 99999,
+                        "epic_key": 99,
+                        "seasonal_key": 99,
+                    },
                 }
                 return True
 
         # Methods that expect basicResult: {code: 0, returnValue: true, success: true, reason: ""}
         BASIC_RESULT_METHODS = {
-            "endSession", "joinLobby", "exitLobby", "acceptMatch",
-            "notifyExitPostMatch", "queryPendingMatch", "updatePlatformPlayerConfig",
-            "presenceBroadcast", "presenceSetReceiveBroadcast",
-            "setPresenceInvisibility", "spectateFriend", "askInGameFriendToPlay",
-            "leaveTeam", "teamInviteConfirm", "teamInviteReject",
-            "teamInviteSend", "teamMemberKick", "queryTeamInvites",
-            "storeRequestPurchaseSKU", "storePrepareIAP", "storeProcessIAP",
-            "storeRecordPendingGift", "storeCancelPendingGift",
-            "dismissReliableMessage", "processMessage",
+            "endSession",
+            "joinLobby",
+            "exitLobby",
+            "acceptMatch",
+            "notifyExitPostMatch",
+            "queryPendingMatch",
+            "updatePlatformPlayerConfig",
+            "presenceBroadcast",
+            "presenceSetReceiveBroadcast",
+            "setPresenceInvisibility",
+            "spectateFriend",
+            "askInGameFriendToPlay",
+            "leaveTeam",
+            "teamInviteConfirm",
+            "teamInviteReject",
+            "teamInviteSend",
+            "teamMemberKick",
+            "queryTeamInvites",
+            "storeRequestPurchaseSKU",
+            "storePrepareIAP",
+            "storeProcessIAP",
+            "storeRecordPendingGift",
+            "storeCancelPendingGift",
+            "dismissReliableMessage",
+            "processMessage",
             "queryPlayerInboxMessages",
-            "addDeviceToken", "setPlayerHandle", "setTutorialState",
-            "report", "reportHonorPlayer",
+            "addDeviceToken",
+            "setPlayerHandle",
+            "setTutorialState",
+            "report",
+            "reportHonorPlayer",
             "notifyPlayerAction",
-            "createAccountForPlayer", "askRegistrationConsent",
+            "createAccountForPlayer",
+            "askRegistrationConsent",
         }
 
         # Methods that expect simpleCallback (fire-and-forget)
         SIMPLE_CALLBACK_METHODS = {
-            "friendDelete", "friendAddFavorite", "friendDeleteFavorite",
-            "friendReplyFromInGame", "friendsListUpdate",
-            "friendNotify", "friendRequestConfirm", "friendRequestReject",
+            "friendDelete",
+            "friendAddFavorite",
+            "friendDeleteFavorite",
+            "friendReplyFromInGame",
+            "friendsListUpdate",
+            "friendNotify",
+            "friendRequestConfirm",
+            "friendRequestReject",
             "friendRequestIssueByHandle",
-            "equippedEmoji", "equippedHat", "equippedPingPack",
+            "equippedEmoji",
+            "equippedHat",
+            "equippedPingPack",
         }
 
         # Methods that return playerInfoUpdate (inventory mutations etc.)
         PLAYER_INFO_METHODS = {
-            "forgeCard", "forgeEssence", "weaveHeroSkin",
-            "equipToSlot", "openRewardChest", "openInventoryChest",
-            "purchaseCardPack", "purchaseDailyPick",
-            "collectProgressiveChest", "collectHeroChest",
-            "redeemQuestForPlayer", "skipQuestForPlayer",
-            "attemptRedeemAscensionChest", "attemptRedeemAscensionRankUpChest",
-            "attemptRedeemAscensionSeasonEndChest", "attemptRedeemSeasonalAscensionChest",
+            "forgeCard",
+            "forgeEssence",
+            "weaveHeroSkin",
+            "equipToSlot",
+            "openRewardChest",
+            "openInventoryChest",
+            "purchaseCardPack",
+            "purchaseDailyPick",
+            "collectProgressiveChest",
+            "collectHeroChest",
+            "redeemQuestForPlayer",
+            "skipQuestForPlayer",
+            "attemptRedeemAscensionChest",
+            "attemptRedeemAscensionRankUpChest",
+            "attemptRedeemAscensionSeasonEndChest",
+            "attemptRedeemSeasonalAscensionChest",
             "buyAscensionSeasonalBundle",
             "spectatorExitMatch",
-            "verifyGovernmentId", "isGovernmentIdVerified",
-            "getBuffManifest", "getForgeManifest",
-            "getRewardsManifest", "getRewardChestDefinitions",
+            "verifyGovernmentId",
+            "isGovernmentIdVerified",
+            "getBuffManifest",
+            "getForgeManifest",
+            "getRewardsManifest",
+            "getRewardChestDefinitions",
             "getProgressiveChestDescriptions",
-            "getQuestDisplayDataForPlayer", "getQuestDisplayDataForPlayerAndType",
-            "getCardBoxManifest", "refreshCardBoxManifest",
-            "getPlayerCardInventory", "getSkinManifest",
-            "setTutorialState", "getHeroMastery",
-            "getDailyPicker", "getInventoryGroups", "getPlayerSkinProgress",
+            "getQuestDisplayDataForPlayer",
+            "getQuestDisplayDataForPlayerAndType",
+            "getCardBoxManifest",
+            "refreshCardBoxManifest",
+            "getPlayerCardInventory",
+            "getSkinManifest",
+            "setTutorialState",
+            "getHeroMastery",
+            "getDailyPicker",
+            "getInventoryGroups",
+            "getPlayerSkinProgress",
             "getTalentsData",
         }
 
@@ -1193,7 +1584,9 @@ class VGInterceptor:
             if rv is None or (isinstance(rv, dict) and not rv):
                 res["code"] = 0
                 res["returnValue"] = True
-                print(f"\033[90m[DEAD]\033[0m {method}: simpleCallback", file=sys.stderr)
+                print(
+                    f"\033[90m[DEAD]\033[0m {method}: simpleCallback", file=sys.stderr
+                )
                 return True
 
         if method in PLAYER_INFO_METHODS:
@@ -1206,10 +1599,18 @@ class VGInterceptor:
                     "level": 30,
                     "wins": 20000,
                     "completed": 40000,
-                    "currency": {"gold": 99999, "essence": 99999, "opal": 99999,
-                                 "silver": 99999, "epic_key": 99, "seasonal_key": 99},
+                    "currency": {
+                        "gold": 99999,
+                        "essence": 99999,
+                        "opal": 99999,
+                        "silver": 99999,
+                        "epic_key": 99,
+                        "seasonal_key": 99,
+                    },
                 }
-                print(f"\033[90m[DEAD]\033[0m {method}: playerInfoUpdate", file=sys.stderr)
+                print(
+                    f"\033[90m[DEAD]\033[0m {method}: playerInfoUpdate", file=sys.stderr
+                )
                 return True
 
         return False
@@ -1246,25 +1647,53 @@ class VGInterceptor:
 
                 # Log the FULL original update response for key analysis
                 # The encryption key might be in a field we're not tracking
-                print(f"\033[36m[MATCH]\033[0m NEW match {match_id[:8]} at {game_host}:{game_port}", file=sys.stderr)
-                print(f"\033[36m[MATCH]\033[0m Full update RV keys: {sorted(rv.keys())}", file=sys.stderr)
+                print(
+                    f"\033[36m[MATCH]\033[0m NEW match {match_id[:8]} at {game_host}:{game_port}",
+                    file=sys.stderr,
+                )
+                print(
+                    f"\033[36m[MATCH]\033[0m Full update RV keys: {sorted(rv.keys())}",
+                    file=sys.stderr,
+                )
                 for k in sorted(rv.keys()):
                     v = rv[k]
-                    if k not in ("host", "port", "matchId", "state", "prevState", "ttl",
-                                 "numPlayers", "numQueuedEntries", "notify", "version",
-                                 "lastVersion", "expiry", "timestamp", "site"):
-                        print(f"\033[36m[MATCH]\033[0m   EXTRA FIELD rv.{k} = {str(v)[:200]}", file=sys.stderr)
+                    if k not in (
+                        "host",
+                        "port",
+                        "matchId",
+                        "state",
+                        "prevState",
+                        "ttl",
+                        "numPlayers",
+                        "numQueuedEntries",
+                        "notify",
+                        "version",
+                        "lastVersion",
+                        "expiry",
+                        "timestamp",
+                        "site",
+                    ):
+                        print(
+                            f"\033[36m[MATCH]\033[0m   EXTRA FIELD rv.{k} = {str(v)[:200]}",
+                            file=sys.stderr,
+                        )
                 listen_port = GAME_PROXY_PORT if GAME_PROXY_PORT else game_port
                 try:
                     proxy = start_match_proxy(
-                        match_id, game_host, game_port, listen_port,
+                        match_id,
+                        game_host,
+                        game_port,
+                        listen_port,
                         user_id=session.get("user_id"),
                     )
                     # If dynamic port allocation, read the actual port
                     if listen_port == 0:
                         listen_port = proxy.listen_port
                 except Exception as e:
-                    print(f"\033[31m[MATCH]\033[0m proxy start failed: {e}", file=sys.stderr)
+                    print(
+                        f"\033[31m[MATCH]\033[0m proxy start failed: {e}",
+                        file=sys.stderr,
+                    )
 
                 # DB match record is created by start_match_proxy() above.
                 # Match RPC data is saved by vg_game_proxy in its match dir
@@ -1278,7 +1707,10 @@ class VGInterceptor:
                     listen_port = proxy.listen_port
             rv["host"] = HOST_IP
             rv["port"] = listen_port
-            print(f"\033[36m[MATCH]\033[0m rewrite: {game_host}:{game_port} -> {HOST_IP}:{listen_port}", file=sys.stderr)
+            print(
+                f"\033[36m[MATCH]\033[0m rewrite: {game_host}:{game_port} -> {HOST_IP}:{listen_port}",
+                file=sys.stderr,
+            )
             modified = True
 
         # Match ended
@@ -1308,10 +1740,14 @@ class VGInterceptor:
                     pass
         # Signal DB worker to stop
         _db_queue.put((None, None, None))
-        print(f"\n[vg_interceptor] {self._count} VG requests logged to {LOG_FILE}", file=sys.stderr)
+        print(
+            f"\n[vg_interceptor] {self._count} VG requests logged to {LOG_FILE}",
+            file=sys.stderr,
+        )
 
 
 # MARK: - Safe DB wrappers (never crash the proxy)
+
 
 def _active_proxies_ref():
     """Access vg_game_proxy's active proxies registry."""
@@ -1326,9 +1762,13 @@ def _safe_upsert_user(player_uuid, handle, client_ip, session):
         print(f"[vg_interceptor] DB upsert_user error: {e}", file=sys.stderr)
 
 
-def _safe_insert_rpc_log(user_id, ts, method, category, status, url, host, req, res, extracted):
+def _safe_insert_rpc_log(
+    user_id, ts, method, category, status, url, host, req, res, extracted
+):
     try:
-        vg_db.insert_rpc_log(user_id, ts, method, category, status, url, host, req, res, extracted)
+        vg_db.insert_rpc_log(
+            user_id, ts, method, category, status, url, host, req, res, extracted
+        )
     except Exception as e:
         print(f"[vg_interceptor] DB insert_rpc_log error: {e}", file=sys.stderr)
 
