@@ -1,0 +1,26 @@
+{
+  "match_id": "56ea88f6-29ba-476c-978a-afbd9b65b266",
+  "real_host": "34.52.184.66",
+  "real_port": 7018,
+  "listen_port": 9000,
+  "force_key": false,
+  "start_time": "2026-04-19T09:52:20.824051+00:00",
+  "packets": [
+    {
+      "n": 1,
+      "dir": "C->S",
+      "ts": 1776592349.9259033,
+      "size": 136
+    },
+    {
+      "n": 2,
+      "dir": "C->S",
+      "ts": 1776592349.9867654,
+      "size": 10
+    }
+  ],
+  "end_time": "2026-04-19T09:52:36.159444+00:00",
+  "total_packets": 2,
+  "bytes_from_client": 146,
+  "bytes_from_server": 0
+}

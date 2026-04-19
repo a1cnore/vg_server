@@ -339,6 +339,22 @@ class VGInterceptor:
         self._count = 0
         print(f"[vg_interceptor] logging to {LOG_FILE}", file=sys.stderr)
 
+    def request(self, flow: http.HTTPFlow) -> None:
+        """Serve ELO bridge config for the dylib."""
+        if flow.request.path == "/vg_elo_config":
+            config = {
+                "5v5_eloBucket": 29,
+                "3v3_eloBucket": 29,
+                "5v5_eloEarned": 3000,
+                "3v3_eloEarned": 3000,
+            }
+            flow.response = http.Response.make(
+                200,
+                json.dumps(config).encode("utf-8"),
+                {"Content-Type": "application/json"},
+            )
+            return
+
     def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Fix upstream address when game connects to our host via /etc/hosts."""
         server = flow.server_conn
