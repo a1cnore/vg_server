@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS "matches" (
   "started_at" timestamp with time zone,
   "ended_at" timestamp with time zone,
   "duration_s" double precision,
-  "total_packets" integer DEFAULT 0 NOT NULL
+  "total_packets" integer DEFAULT 0 NOT NULL,
+  "winning_team" integer DEFAULT 0 NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS "match_players" (
@@ -42,7 +43,9 @@ CREATE TABLE IF NOT EXISTS "match_players" (
   "xp" double precision DEFAULT 0 NOT NULL,
   "pos_x" double precision DEFAULT 0 NOT NULL,
   "pos_y" double precision DEFAULT 0 NOT NULL,
-  "items_bought" integer DEFAULT 0 NOT NULL
+  "items_bought" integer DEFAULT 0 NOT NULL,
+  "assists" integer DEFAULT 0 NOT NULL,
+  "move_speed" double precision DEFAULT 0 NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS "match_events" (
