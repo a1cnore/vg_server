@@ -404,7 +404,7 @@ class VGInterceptor:
 
         # MARK: - Response modification
         if isinstance(res_body, dict):
-            modified = self._modify_response(method, res_body, session)
+            modified = self._modify_response(method, res_body, session, req_body)
             # Track match lifecycle and rewrite game server host
             modified |= self._track_match(method, res_body, session)
             if modified:
@@ -440,7 +440,7 @@ class VGInterceptor:
             url, host, req_body, res_body, extracted or None,
         )
 
-    def _modify_response(self, method: str, res: dict, session: dict) -> bool:
+    def _modify_response(self, method: str, res: dict, session: dict, req_body: dict | None = None) -> bool:
         """Modify response data in-place. Returns True if modified."""
         # Patches to apply to playerInfo wherever it appears
         PLAYER_PATCHES = {
@@ -672,11 +672,11 @@ class VGInterceptor:
                         talent["level"] = 20
                 modified = True
 
-        modified |= self._inject_social_data(method, res, session)
+        modified |= self._inject_social_data(method, res, session, req_body)
 
         return modified
 
-    def _inject_social_data(self, method: str, res: dict, session: dict) -> bool:
+    def _inject_social_data(self, method: str, res: dict, session: dict, req_body: dict | None = None) -> bool:
         """Inject fake friends/leaderboard/live-event data into empty responses.
 
         The E.V.I.L. engine hides UI panels when the server returns empty data.
@@ -871,7 +871,7 @@ class VGInterceptor:
         # ── Dead endpoint catch-all ──
         # For any RPC the server returns empty/error, give a valid response
         # so the client parser doesn't choke.
-        modified |= self._handle_dead_endpoint(method, res, session)
+        modified |= self._handle_dead_endpoint(method, res, session, req_body)
 
         return modified
 
@@ -979,7 +979,7 @@ class VGInterceptor:
 
         return False
 
-    def _handle_dead_endpoint(self, method: str, res: dict, session: dict) -> bool:
+    def _handle_dead_endpoint(self, method: str, res: dict, session: dict, req_body: dict | None = None) -> bool:
         """Catch-all: return valid responses for dead endpoints the client may call.
 
         Response types from RE analysis (GhidraRpcSchemaExtractor):
@@ -1009,6 +1009,111 @@ class VGInterceptor:
                        "queryPartyInvites"):
             return False
 
+        # ── notifyGameResults: client sends match results to server post-match ──
+        # Response type: playerInfoUpdate. The client sends this after the spoils
+        # screen, but in CE mode the spoils screen is skipped so this is never sent.
+        # If/when we re-enable the spoils screen, this will fire. Log the request
+        # and return a full playerInfoUpdate so the client can process rewards.
+        _player_handle = session["player_handle"]
+        _player_uuid = session["player_uuid"]
+
+        if method == "notifyGameResults":
+            print(f"\033[33;1m[MATCH-RESULTS]\033[0m notifyGameResults RECEIVED!", file=sys.stderr)
+            if req_body:
+                import json as _json
+                print(f"\033[33;1m[MATCH-RESULTS]\033[0m request body: {_json.dumps(req_body, indent=2)[:2000]}", file=sys.stderr)
+            res["code"] = 0
+            res["returnValue"] = {
+                "handle": _player_handle,
+                "playerUUID": _player_uuid,
+                "skillTier": 29,
+                "level": 30,
+                "completed": 40001,
+                "completed_non_tutorial": 40001,
+                "wins": 20001,
+                "wins_ranked": 5000,
+                "wins_casual": 10000,
+                "wins_blitz": 3000,
+                "wins_aral": 2001,
+                "winStreak": 3,
+                "winsToday": 1,
+                "wins_season": 150,
+                "xp": 7500,
+                "levelMinXP": 5000,
+                "levelMaxXP": 10000,
+                "currency": {
+                    "gold": 100200, "essence": 99999, "opal": 99999,
+                    "silver": 99999, "epic_key": 99, "seasonal_key": 99,
+                },
+                "karma": 160.0,
+                "karmaLevel": 2,
+                "karmaProgress": 0.85,
+                "karmaSilverBonus": 0.05,
+                "isDev": False,
+                "canUseAllHeroes": True,
+                "skillProgressionInfo": {
+                    "ranked": {
+                        "skillTier": 29, "seasonMaxSkillTier": 29,
+                        "eloEarned": 3020.0, "seasonEloEarned": 3020.0,
+                        "eloEarnedDelta": 20.0,
+                        "skillTierProgress": 0.96, "skillTierBronzeLine": 0.0,
+                        "skillTierSilverLine": 0.8333, "skillTierGoldLine": 0.9166,
+                    },
+                    "5v5_pvp_ranked": {
+                        "skillTier": 29, "seasonMaxSkillTier": 29,
+                        "eloEarned": 3020.0, "seasonEloEarned": 3020.0,
+                        "eloEarnedDelta": 20.0,
+                        "skillTierProgress": 0.96, "skillTierBronzeLine": 0.0,
+                        "skillTierSilverLine": 0.8333, "skillTierGoldLine": 0.9166,
+                    },
+                    "blitz_pvp_ranked": {
+                        "skillTier": 29, "seasonMaxSkillTier": 29,
+                        "eloEarned": 3020.0, "seasonEloEarned": 3020.0,
+                        "eloEarnedDelta": 20.0,
+                        "skillTierProgress": 0.96, "skillTierBronzeLine": 0.0,
+                        "skillTierSilverLine": 0.8333, "skillTierGoldLine": 0.9166,
+                    },
+                },
+                "trophyCase": [
+                    {"season": s, "trophy_type": t, "value": 29, "trophy_name": "Vainglorious"}
+                    for s in range(19)
+                    for t in ("individual_skill_tier", "individual_5v5_skill_tier")
+                ],
+                "tutorialState": "complete",
+                "guildUUID": "",
+                "teamUUID": "",
+            }
+            print(f"\033[33;1m[MATCH-RESULTS]\033[0m returned playerInfoUpdate with match rewards", file=sys.stderr)
+            return True
+
+        # ── notifyExitPostMatch: log request for analysis ──
+        if method == "notifyExitPostMatch":
+            print(f"\033[36m[MATCH]\033[0m notifyExitPostMatch called", file=sys.stderr)
+            if req_body:
+                import json as _json
+                keys = list(req_body.keys()) if isinstance(req_body, dict) else []
+                print(f"\033[36m[MATCH]\033[0m   request keys: {keys}", file=sys.stderr)
+
+        # ── updateMatchInfo + recordMatchExperienceMetrics: log and return playerInfoUpdate ──
+        if method in ("updateMatchInfo", "recordMatchExperienceMetrics"):
+            print(f"\033[33;1m[MATCH-INFO]\033[0m {method} RECEIVED!", file=sys.stderr)
+            if req_body:
+                import json as _json
+                print(f"\033[33;1m[MATCH-INFO]\033[0m request body: {_json.dumps(req_body, indent=2)[:2000]}", file=sys.stderr)
+            if rv is None or (isinstance(rv, dict) and not rv):
+                res["code"] = 0
+                res["returnValue"] = {
+                    "handle": _player_handle,
+                    "playerUUID": _player_uuid,
+                    "skillTier": 29,
+                    "level": 30,
+                    "wins": 20001,
+                    "completed": 40001,
+                    "currency": {"gold": 100200, "essence": 99999, "opal": 99999,
+                                 "silver": 99999, "epic_key": 99, "seasonal_key": 99},
+                }
+                return True
+
         # Methods that expect basicResult: {code: 0, returnValue: true, success: true, reason: ""}
         BASIC_RESULT_METHODS = {
             "endSession", "joinLobby", "exitLobby", "acceptMatch", "rejectMatch",
@@ -1023,7 +1128,7 @@ class VGInterceptor:
             "queryPlayerInboxMessages",
             "addDeviceToken", "setPlayerHandle", "setTutorialState",
             "report", "reportHonorPlayer",
-            "notifyPlayerAction", "notifyGameResults",
+            "notifyPlayerAction",
             "createAccountForPlayer", "askRegistrationConsent",
         }
 
@@ -1046,7 +1151,7 @@ class VGInterceptor:
             "attemptRedeemAscensionChest", "attemptRedeemAscensionRankUpChest",
             "attemptRedeemAscensionSeasonEndChest", "attemptRedeemSeasonalAscensionChest",
             "buyAscensionSeasonalBundle",
-            "recordMatchExperienceMetrics", "spectatorExitMatch",
+            "spectatorExitMatch",
             "verifyGovernmentId", "isGovernmentIdVerified",
             "getBuffManifest", "getForgeManifest",
             "getRewardsManifest", "getRewardChestDefinitions",
