@@ -122,6 +122,7 @@ export default function UserDetailClient({
                 startedAt={m.startedAt}
                 durationS={m.durationS}
                 userHandle={null}
+                winningTeam={0}
                 blueKills={0}
                 redKills={0}
               />

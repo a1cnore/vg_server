@@ -6,6 +6,7 @@ interface Player {
   team: number | null;
   kills: number;
   deaths: number;
+  assists: number;
   cs: number;
   level: number;
   gold: number;
@@ -16,7 +17,7 @@ interface Player {
   inCombat: boolean;
 }
 
-const cols = ["Player", "K", "D", "CS", "LVL", "Gold", "XP", "Items", "Pos"];
+const cols = ["Player", "K", "D", "A", "CS", "LVL", "Gold", "XP", "Items", "Pos"];
 
 function TeamSection({
   label,
@@ -49,6 +50,7 @@ function TeamSection({
           </td>
           <td className="px-2 py-1 font-mono text-xs text-text-primary">{p.kills}</td>
           <td className="px-2 py-1 font-mono text-xs text-text-primary">{p.deaths}</td>
+          <td className="px-2 py-1 font-mono text-xs text-text-primary">{p.assists}</td>
           <td className="px-2 py-1 font-mono text-xs text-text-primary">{p.cs}</td>
           <td className="px-2 py-1 font-mono text-xs text-text-primary">{p.level}</td>
           <td className="px-2 py-1 font-mono text-xs text-text-primary">{p.gold.toLocaleString()}</td>

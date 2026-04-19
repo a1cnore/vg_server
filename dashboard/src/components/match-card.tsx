@@ -10,6 +10,7 @@ interface MatchCardProps {
   userHandle: string | null;
   startedAt: string | null;
   durationS: number | null;
+  winningTeam: number;
   blueKills: number;
   redKills: number;
   href?: string | null;
@@ -37,7 +38,9 @@ export function MatchCard(m: MatchCardProps) {
       <div className="ml-auto flex items-center gap-3 shrink-0">
         <span className="font-mono text-xs">
           <span className="text-accent-cyan">{m.blueKills}</span>
+          {m.winningTeam === 1 && <span className="text-accent-cyan ml-0.5 text-[10px] font-bold">W</span>}
           <span className="text-text-dim mx-1">-</span>
+          {m.winningTeam === 2 && <span className="text-accent-red mr-0.5 text-[10px] font-bold">W</span>}
           <span className="text-accent-red">{m.redKills}</span>
         </span>
 

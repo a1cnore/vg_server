@@ -9,10 +9,12 @@ interface TimelineEvent {
 const typeColor: Record<string, string> = {
   kill: "text-accent-green",
   death: "text-accent-red",
+  assist: "text-yellow-300",
   level: "text-accent-gold",
   item: "text-text-dim",
   hit: "text-orange-400",
   respawn: "text-accent-blue",
+  winner: "text-purple-400",
 };
 
 function formatTime(seconds: number): string {

@@ -1116,7 +1116,7 @@ class VGInterceptor:
 
         # Methods that expect basicResult: {code: 0, returnValue: true, success: true, reason: ""}
         BASIC_RESULT_METHODS = {
-            "endSession", "joinLobby", "exitLobby", "acceptMatch", "rejectMatch",
+            "endSession", "joinLobby", "exitLobby", "acceptMatch",
             "notifyExitPostMatch", "queryPendingMatch", "updatePlatformPlayerConfig",
             "presenceBroadcast", "presenceSetReceiveBroadcast",
             "setPresenceInvisibility", "spectateFriend", "askInGameFriendToPlay",

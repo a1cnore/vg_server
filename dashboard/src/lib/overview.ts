@@ -21,6 +21,7 @@ export interface RecentMatchSummary {
   status: string;
   startedAt: string | null;
   durationS: number | null;
+  winningTeam: number;
   userHandle: string | null;
   blueKills: number;
   redKills: number;
@@ -58,6 +59,7 @@ export async function getOverviewData(): Promise<OverviewData> {
         status: matches.status,
         startedAt: matches.startedAt,
         durationS: matches.durationS,
+        winningTeam: matches.winningTeam,
         userHandle: users.playerHandle,
         blueKills:
           sql<number>`coalesce(sum(case when ${matchPlayers.team} = 1 then ${matchPlayers.kills} else 0 end), 0)`.as(

@@ -27,6 +27,7 @@ export async function GET(
         endedAt: matches.endedAt,
         durationS: matches.durationS,
         totalPackets: matches.totalPackets,
+        winningTeam: matches.winningTeam,
         userHandle: users.playerHandle,
       })
       .from(matches)

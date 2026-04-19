@@ -19,6 +19,7 @@ export async function GET() {
       startedAt: matches.startedAt,
       durationS: matches.durationS,
       totalPackets: matches.totalPackets,
+      winningTeam: matches.winningTeam,
       userHandle: users.playerHandle,
       blueKills: sql<number>`coalesce(sum(case when ${matchPlayers.team} = 1 then ${matchPlayers.kills} else 0 end), 0)`.as("blue_kills"),
       redKills: sql<number>`coalesce(sum(case when ${matchPlayers.team} = 2 then ${matchPlayers.kills} else 0 end), 0)`.as("red_kills"),

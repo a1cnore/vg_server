@@ -15,6 +15,7 @@ interface Player {
   entityId: number | null;
   kills: number;
   deaths: number;
+  assists: number;
   cs: number;
   level: number;
   gold: number;
@@ -28,6 +29,7 @@ interface Player {
   hpDelta: number;
   abilityCd: number;
   goldSpent: number;
+  moveSpeed: number;
 }
 
 interface MatchEvent {
@@ -46,6 +48,7 @@ interface MatchInfo {
   endedAt: string | null;
   durationS: number | null;
   totalPackets: number;
+  winningTeam: number;
   userHandle: string | null;
 }
 
@@ -103,6 +106,17 @@ export default function MatchClient({
           {formatDuration(m.durationS)}
         </span>
         <StatusDot status={isLive ? "live" : "completed"} />
+        {m.winningTeam > 0 && (
+          <span
+            className={`px-2 py-0.5 text-xs font-semibold rounded border ${
+              m.winningTeam === 1
+                ? "text-[#22d3ee] bg-[#22d3ee]/10 border-[#22d3ee]/30"
+                : "text-[#ef4444] bg-[#ef4444]/10 border-[#ef4444]/30"
+            }`}
+          >
+            {m.winningTeam === 1 ? "Blue" : "Red"} Win
+          </span>
+        )}
         <span className="text-[#666] text-xs font-mono">
           {m.totalPackets} pkts
         </span>

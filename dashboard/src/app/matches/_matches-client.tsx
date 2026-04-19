@@ -10,6 +10,7 @@ interface Match {
   startedAt: string | null;
   durationS: number | null;
   totalPackets: number;
+  winningTeam: number;
   userHandle: string | null;
   blueKills: number;
   redKills: number;

@@ -8,6 +8,7 @@ interface Player {
   energyDelta: number;
   hpDelta: number;
   abilityCd: number;
+  moveSpeed: number;
 }
 
 const stats = [
@@ -15,6 +16,7 @@ const stats = [
   { key: "energyDelta" as const, label: "E.Dlt" },
   { key: "hpDelta" as const, label: "HP", abs: true },
   { key: "abilityCd" as const, label: "CD" },
+  { key: "moveSpeed" as const, label: "Spd" },
 ];
 
 function StatBar({
@@ -56,6 +58,7 @@ export function PlayerStats({ players }: { players: Player[] }) {
     energyDelta: Math.max(1, ...active.map((p) => Math.abs(p.energyDelta))),
     hpDelta: Math.max(1, ...active.map((p) => Math.abs(p.hpDelta))),
     abilityCd: Math.max(1, ...active.map((p) => Math.abs(p.abilityCd))),
+    moveSpeed: Math.max(1, ...active.map((p) => Math.abs(p.moveSpeed))),
   };
 
   return (

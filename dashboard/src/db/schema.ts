@@ -41,6 +41,7 @@ export const matches = pgTable(
     endedAt: timestamp("ended_at", { withTimezone: true }),
     durationS: doublePrecision("duration_s"),
     totalPackets: integer("total_packets").default(0).notNull(),
+    winningTeam: integer("winning_team").default(0).notNull(),
   },
   (t) => [uniqueIndex("matches_match_id_idx").on(t.matchId)]
 );
@@ -58,6 +59,7 @@ export const matchPlayers = pgTable(
     entityId: integer("entity_id"),
     kills: integer("kills").default(0).notNull(),
     deaths: integer("deaths").default(0).notNull(),
+    assists: integer("assists").default(0).notNull(),
     cs: integer("cs").default(0).notNull(),
     level: integer("level").default(1).notNull(),
     gold: integer("gold").default(0).notNull(),
@@ -71,6 +73,7 @@ export const matchPlayers = pgTable(
     hpDelta: doublePrecision("hp_delta").default(0).notNull(),
     abilityCd: doublePrecision("ability_cd").default(0).notNull(),
     goldSpent: doublePrecision("gold_spent").default(0).notNull(),
+    moveSpeed: doublePrecision("move_speed").default(0).notNull(),
   },
   (t) => [uniqueIndex("match_players_match_slot_idx").on(t.matchId, t.slot)]
 );

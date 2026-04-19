@@ -83,6 +83,7 @@ export function getAdminLoginHref(nextPath: string): string {
 }
 
 export async function isAdminAuthenticated(): Promise<boolean> {
+  if (!isAdminConfigured()) return true;
   const cookieStore = await cookies();
   return isSessionValueValid(cookieStore.get(ADMIN_SESSION_COOKIE)?.value);
 }

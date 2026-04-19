@@ -28,6 +28,7 @@ export default async function Page({
         endedAt: matches.endedAt,
         durationS: matches.durationS,
         totalPackets: matches.totalPackets,
+        winningTeam: matches.winningTeam,
         userHandle: users.playerHandle,
       })
       .from(matches)

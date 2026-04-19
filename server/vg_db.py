@@ -216,7 +216,7 @@ def create_match(user_id, match_id, real_host, real_port):
 
 
 _MATCH_ALLOWED = {"game_mode", "status", "ended_at", "duration_s",
-                  "total_packets"}
+                  "total_packets", "winning_team"}
 
 
 def update_match(match_id_text, **fields):
@@ -245,10 +245,10 @@ def update_match(match_id_text, **fields):
 # Match players
 # ---------------------------------------------------------------------------
 
-_MP_ALLOWED = {"handle", "team", "entity_id", "kills", "deaths", "cs",
-               "level", "gold", "xp", "pos_x", "pos_y", "items_bought",
+_MP_ALLOWED = {"handle", "team", "entity_id", "kills", "deaths", "assists",
+               "cs", "level", "gold", "xp", "pos_x", "pos_y", "items_bought",
                "in_combat", "energy_regen", "energy_delta", "hp_delta",
-               "ability_cd", "gold_spent"}
+               "ability_cd", "gold_spent", "move_speed"}
 
 
 def upsert_match_player(db_match_id, slot, **fields):
