@@ -82,3 +82,21 @@ ALTER TABLE match_players ADD COLUMN IF NOT EXISTS energy_delta double precision
 ALTER TABLE match_players ADD COLUMN IF NOT EXISTS hp_delta double precision DEFAULT 0 NOT NULL;
 ALTER TABLE match_players ADD COLUMN IF NOT EXISTS ability_cd double precision DEFAULT 0 NOT NULL;
 ALTER TABLE match_players ADD COLUMN IF NOT EXISTS gold_spent double precision DEFAULT 0 NOT NULL;
+
+-- Per-player ranked elo data (10 KV fields the game reads for profile badge)
+CREATE TABLE IF NOT EXISTS "ranked_data" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "account_handle" text NOT NULL UNIQUE,
+  "new_5v5_elo_bucket" integer DEFAULT 29 NOT NULL,
+  "prev_5v5_elo_bucket" integer DEFAULT 29 NOT NULL,
+  "new_5v5_m_elo_bucket" integer DEFAULT 29 NOT NULL,
+  "prev_5v5_m_elo_earned" integer DEFAULT 3000 NOT NULL,
+  "new_5v5_m_elo_earned" integer DEFAULT 3000 NOT NULL,
+  "new_3v3_elo_bucket" integer DEFAULT 29 NOT NULL,
+  "prev_3v3_elo_bucket" integer DEFAULT 29 NOT NULL,
+  "new_3v3_m_elo_bucket" integer DEFAULT 29 NOT NULL,
+  "prev_3v3_m_elo_earned" integer DEFAULT 3000 NOT NULL,
+  "new_3v3_m_elo_earned" integer DEFAULT 3000 NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now(),
+  "updated_at" timestamp with time zone DEFAULT now()
+);

@@ -488,22 +488,92 @@ class VGInterceptor:
 
     def request(self, flow: http.HTTPFlow) -> None:
         """Intercept custom endpoints before they are forwarded upstream."""
-        if flow.request.path.endswith("/vg_elo_config"):
+        if "/vg_elo_config" in flow.request.path:
+            if flow.request.method == "PUT":
+                self._handle_elo_config_put(flow)
+            else:
+                self._handle_elo_config_get(flow)
+            return
+
+    def _handle_elo_config_get(self, flow: http.HTTPFlow) -> None:
+        """Serve GET /vg_elo_config?account=<handle> from DB."""
+        from urllib.parse import parse_qs, urlparse
+
+        query = parse_qs(urlparse(flow.request.path).query)
+        account = query.get("account", [""])[0]
+
+        config = None
+        if account and vg_db is not None:
+            try:
+                config = vg_db.get_ranked_data(account)
+            except Exception as e:
+                print(
+                    f"[vg_interceptor] elo_config DB error: {e}", file=sys.stderr
+                )
+
+        if config is None:
+            # Fallback defaults when DB is unavailable or no account given
             config = {
-                "5v5_eloBucket": 69,
-                "3v3_eloBucket": 69,
-                "5v5_eloEarned": 1500,
-                "3v3_eloEarned": 1500,
+                "new5v5RankedDataEloBucket": 29,
+                "prev5v5RankedDataEloBucket": 29,
+                "new5v5RankedDatamEloBucket": 29,
+                "prev5v5RankedDatamEloEarned": 3000,
+                "new5v5RankedDatamEloEarned": 3000,
+                "new3v3RankedDataEloBucket": 29,
+                "prev3v3RankedDataEloBucket": 29,
+                "new3v3RankedDatamEloBucket": 29,
+                "prev3v3RankedDatamEloEarned": 3000,
+                "new3v3RankedDatamEloEarned": 3000,
             }
+
+        flow.response = http.Response.make(
+            200,
+            json.dumps(config).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        print(
+            f"[vg_interceptor] served /vg_elo_config for account={account!r}",
+            file=sys.stderr,
+        )
+
+    def _handle_elo_config_put(self, flow: http.HTTPFlow) -> None:
+        """Handle PUT /vg_elo_config to update a player's elo data."""
+        body = parse_json_body(flow.request.get_content())
+        if not isinstance(body, dict) or "account" not in body:
             flow.response = http.Response.make(
-                200,
-                json.dumps(config).encode("utf-8"),
+                400,
+                json.dumps({"error": "missing 'account' field"}).encode("utf-8"),
                 {"Content-Type": "application/json"},
             )
-            print(
-                f"[vg_interceptor] served /vg_elo_config (not forwarded)",
-                file=sys.stderr,
+            return
+
+        account = body.pop("account")
+        result = None
+        if vg_db is not None:
+            try:
+                result = vg_db.upsert_ranked_data(account, **body)
+            except Exception as e:
+                print(
+                    f"[vg_interceptor] elo_config PUT error: {e}", file=sys.stderr
+                )
+
+        if result is None:
+            flow.response = http.Response.make(
+                500,
+                json.dumps({"error": "DB unavailable"}).encode("utf-8"),
+                {"Content-Type": "application/json"},
             )
+            return
+
+        flow.response = http.Response.make(
+            200,
+            json.dumps(result).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        print(
+            f"[vg_interceptor] updated elo_config for account={account!r}",
+            file=sys.stderr,
+        )
 
     def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Fix upstream address when game connects to our host via /etc/hosts."""

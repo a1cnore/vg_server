@@ -245,6 +245,103 @@ def update_match(match_id_text, **fields):
 # Match players
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Ranked data
+# ---------------------------------------------------------------------------
+
+# Maps DB column names to the KV key names used by the game client
+_RANKED_COLS = [
+    "new_5v5_elo_bucket", "prev_5v5_elo_bucket", "new_5v5_m_elo_bucket",
+    "prev_5v5_m_elo_earned", "new_5v5_m_elo_earned",
+    "new_3v3_elo_bucket", "prev_3v3_elo_bucket", "new_3v3_m_elo_bucket",
+    "prev_3v3_m_elo_earned", "new_3v3_m_elo_earned",
+]
+
+_RANKED_TO_KV = {
+    "new_5v5_elo_bucket": "new5v5RankedDataEloBucket",
+    "prev_5v5_elo_bucket": "prev5v5RankedDataEloBucket",
+    "new_5v5_m_elo_bucket": "new5v5RankedDatamEloBucket",
+    "prev_5v5_m_elo_earned": "prev5v5RankedDatamEloEarned",
+    "new_5v5_m_elo_earned": "new5v5RankedDatamEloEarned",
+    "new_3v3_elo_bucket": "new3v3RankedDataEloBucket",
+    "prev_3v3_elo_bucket": "prev3v3RankedDataEloBucket",
+    "new_3v3_m_elo_bucket": "new3v3RankedDatamEloBucket",
+    "prev_3v3_m_elo_earned": "prev3v3RankedDatamEloEarned",
+    "new_3v3_m_elo_earned": "new3v3RankedDatamEloEarned",
+}
+
+_KV_TO_RANKED = {v: k for k, v in _RANKED_TO_KV.items()}
+
+
+def get_ranked_data(account_handle):
+    """Get ranked elo data for an account handle, creating defaults if new."""
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ranked_data (account_handle)
+                VALUES (%s)
+                ON CONFLICT (account_handle) DO NOTHING
+                """,
+                (account_handle,),
+            )
+            cur.execute(
+                "SELECT {} FROM ranked_data WHERE account_handle = %s".format(
+                    ", ".join(_RANKED_COLS)
+                ),
+                (account_handle,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        if not row:
+            return None
+        return {_RANKED_TO_KV[col]: row[i] for i, col in enumerate(_RANKED_COLS)}
+    except Exception as e:
+        conn.rollback()
+        _log(f"get_ranked_data error: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def upsert_ranked_data(account_handle, **fields):
+    """Update ranked elo fields for an account. Keys are KV names."""
+    updates = {}
+    for kv_key, val in fields.items():
+        db_col = _KV_TO_RANKED.get(kv_key)
+        if db_col is not None:
+            updates[db_col] = int(val)
+    if not updates:
+        return None
+    set_clause = ", ".join(f"{k} = %s" for k in updates)
+    vals = list(updates.values())
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO ranked_data (account_handle, {", ".join(updates.keys())})
+                VALUES (%s, {", ".join(["%s"] * len(updates))})
+                ON CONFLICT (account_handle) DO UPDATE SET
+                    {set_clause}, updated_at = now()
+                """,
+                [account_handle] + vals + vals,
+            )
+        conn.commit()
+        return get_ranked_data(account_handle)
+    except Exception as e:
+        conn.rollback()
+        _log(f"upsert_ranked_data error: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+# ---------------------------------------------------------------------------
+# Match players
+# ---------------------------------------------------------------------------
+
 _MP_ALLOWED = {"handle", "team", "entity_id", "kills", "deaths", "assists",
                "cs", "level", "gold", "xp", "pos_x", "pos_y", "items_bought",
                "in_combat", "energy_regen", "energy_delta", "hp_delta",
